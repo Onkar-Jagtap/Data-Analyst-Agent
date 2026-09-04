@@ -236,6 +236,38 @@ export interface DashboardMetricsSummary {
   ratioFormatted: string;
   filteredRowCount: number;
   totalRowCount: number;
+  profitMarginFormatted?: string;
+  averageOrderValueFormatted?: string;
+  topSegmentName?: string;
+  topSegmentShareFormatted?: string;
+  paretoTop20ShareFormatted?: string;
+  periodGrowthFormatted?: string;
+  refundAdjustmentTotalFormatted?: string;
+  refundAdjustmentCount?: number;
+}
+
+export interface BusinessCalculations {
+  totalRevenue: number;
+  totalRevenueFormatted: string;
+  totalProfit: number;
+  totalProfitFormatted: string;
+  profitMarginPct: number;
+  profitMarginFormatted: string;
+  averageOrderValue: number;
+  averageOrderValueFormatted: string;
+  topSegmentName: string;
+  topSegmentRevenue: number;
+  topSegmentSharePct: number;
+  topSegmentShareFormatted: string;
+  paretoTop20SharePct: number;
+  paretoTop20ShareFormatted: string;
+  periodGrowthPct: number | null;
+  periodGrowthFormatted: string;
+  refundAdjustmentCount: number;
+  refundAdjustmentTotal: number;
+  refundAdjustmentFormatted: string;
+  efficiencyRatio: number;
+  efficiencyRatioFormatted: string;
 }
 
 export interface DashboardData {
@@ -245,6 +277,7 @@ export interface DashboardData {
   filterPercentage: number;
   dimension?: string;
   metrics?: DashboardMetricsSummary;
+  businessCalculations?: BusinessCalculations;
   activeFilters: {
     dimension: string;
     metric: string;
@@ -283,6 +316,7 @@ export interface DashboardData {
 export type ActiveTab =
   | 'overview'
   | 'dashboard'
+  | 'report'
   | 'profile'
   | 'quality'
   | 'insights'
@@ -397,4 +431,69 @@ export interface ChatMessage {
   timestamp: string;
   result?: AnalysisResult;
 }
+
+export interface StrategicActionItem {
+  id: string;
+  category: 'Immediate 30-Day' | '60-90 Day Optimization' | 'Governance & Data Quality' | 'Risk & Sensitivity';
+  title: string;
+  action: string;
+  expectedImpact: string;
+  priority: 'Critical' | 'High' | 'Medium';
+  responsibleRole: string;
+}
+
+export interface ReportVisualSection {
+  id: string;
+  title: string;
+  subtitle: string;
+  businessInterpretation: string;
+  keyTakeaway: string;
+  chart: any;
+  chartType: string;
+}
+
+export interface ExecutiveReport {
+  generatedAt: string;
+  datasetName: string;
+  datasetId: string;
+  datasetScale: {
+    rows: number;
+    columns: number;
+    completenessScore: number;
+    primaryDomain: string;
+  };
+  executiveBrief: {
+    headline: string;
+    overview: string;
+    macroContext: string;
+    strengths: string[];
+    risks: string[];
+    aiGenerated?: boolean;
+  };
+  businessEconomics: BusinessCalculations;
+  kpis: {
+    title: string;
+    value: string;
+    subValue?: string;
+    trend?: 'up' | 'down' | 'neutral';
+    trendValue?: string;
+    status: 'good' | 'warning' | 'neutral' | 'danger';
+  }[];
+  visualSections: ReportVisualSection[];
+  dataQualityHealth: {
+    overallScore: number;
+    status: 'Excellent' | 'Good' | 'Needs Attention';
+    totalRows: number;
+    duplicateRows: number;
+    outlierCount: number;
+    nullRate: number;
+    complianceNote: string;
+  };
+  actionPlan: StrategicActionItem[];
+  reproducibleScript: {
+    python: string;
+    sql: string;
+  };
+}
+
 

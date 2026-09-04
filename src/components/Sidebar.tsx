@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Database,
   FileSpreadsheet,
+  FileText,
   LayoutDashboard,
   LayoutGrid,
   MessageSquareCode,
@@ -46,6 +47,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'BI Dashboard',
       icon: <LayoutGrid className="w-4 h-4" />,
       badge: 'KPIs',
+    },
+    {
+      id: 'report',
+      label: 'Full Report',
+      icon: <FileText className="w-4 h-4 text-emerald-400" />,
+      badge: 'Strategy',
     },
     {
       id: 'profile',
@@ -177,6 +184,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       )}
+      {/* Brand Footer */}
+      <div className="p-3 border-t border-slate-900/80 bg-slate-950/40">
+        {!collapsed ? (
+          <div className="flex items-center justify-between text-[11px]">
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-semibold text-slate-300 tracking-tight">Data Studio</span>
+            </div>
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-300 border border-blue-500/20">
+              by PJA
+            </span>
+          </div>
+        ) : (
+          <div className="text-center font-bold text-[9px] text-blue-400 py-0.5">
+            PJA
+          </div>
+        )}
+      </div>
     </aside>
   );
 };

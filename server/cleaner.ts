@@ -418,12 +418,43 @@ function maskPiiValue(val: any, colName: string): string {
 
 export function performDataCleaning(
   originalRows: Record<string, any>[],
-  profile: DatasetProfile,
-  action: string,
+  profile: DatasetProfile | any,
+  action: string | { action?: string; type?: string; column?: string; targetColumn?: string; value?: any },
   targetColumn?: string,
   constantValue?: any
 ): CleaningResult {
-  const res = _performDataCleaning(originalRows, profile, action, targetColumn, constantValue);
+  let effectiveAction = '';
+  let effectiveCol = targetColumn;
+  let effectiveVal = constantValue;
+
+  if (typeof action === 'object' && action !== null) {
+    effectiveAction = action.action || action.type || '';
+    effectiveCol = action.column || action.targetColumn || effectiveCol;
+    effectiveVal = action.value !== undefined ? action.value : effectiveVal;
+  } else {
+    effectiveAction = String(action || '');
+  }
+
+  let effectiveProfile: DatasetProfile;
+  if (Array.isArray(profile)) {
+    effectiveProfile = {
+      id: 'temp',
+      filename: 'temp.csv',
+      rowCount: originalRows.length,
+      columnCount: profile.length,
+      memoryEstimateKb: 100,
+      duplicateRowCount: 0,
+      duplicatePercentage: 0,
+      totalMissingCells: 0,
+      missingPercentage: 0,
+      columns: profile,
+      createdAt: new Date().toISOString(),
+    };
+  } else {
+    effectiveProfile = profile;
+  }
+
+  const res = _performDataCleaning(originalRows, effectiveProfile, effectiveAction, effectiveCol, effectiveVal);
   return {
     ...res,
     cleanedRows: res.cleanedData,

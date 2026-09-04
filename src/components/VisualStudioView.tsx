@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {
+  Activity,
   BarChart3,
+  Box,
   Check,
   Code2,
   Download,
@@ -139,6 +141,8 @@ export const VisualStudioView: React.FC<VisualStudioViewProps> = ({
     { id: 'combo', label: 'Dual-Axis Combo', icon: <Layers className="w-4 h-4 text-emerald-400" /> },
     { id: 'treemap', label: 'Treemap', icon: <LayoutGrid className="w-4 h-4 text-amber-400" /> },
     { id: 'sunburst', label: 'Sunburst', icon: <Sun className="w-4 h-4 text-purple-400" /> },
+    { id: 'scatter', label: 'Scatter Plot', icon: <Activity className="w-4 h-4 text-cyan-400" /> },
+    { id: 'box', label: 'Box & Whisker', icon: <Box className="w-4 h-4 text-pink-400" /> },
     { id: 'heatmap', label: 'Correlation', icon: <Grid className="w-4 h-4" /> },
     { id: 'histogram', label: 'Histogram', icon: <Layers className="w-4 h-4" /> },
     { id: 'pie', label: 'Pie Chart', icon: <PieChart className="w-4 h-4" /> },

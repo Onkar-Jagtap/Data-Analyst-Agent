@@ -255,6 +255,8 @@ export function auditDataQuality(data: Record<string, any>[], profile: DatasetPr
   return {
     datasetId: profile.id,
     score,
+    overallScore: score,
+    duplicateRowsCount: profile.duplicateRowCount,
     rating,
     compliance: {
       complianceScore,
@@ -295,20 +297,22 @@ export function auditDataQuality(data: Record<string, any>[], profile: DatasetPr
 // Custom Business Assertion Quality Rule Engine
 export function evaluateBusinessAssertions(
   data: Record<string, any>[],
-  profile: DatasetProfile,
-  assertions: BusinessAssertion[]
-): AssertionEvaluationResult[] {
+  arg2: DatasetProfile | BusinessAssertion[],
+  arg3?: BusinessAssertion[]
+): AssertionEvaluationResult[] & { results: AssertionEvaluationResult[]; overallStatus: 'pass' | 'warn' | 'fail'; passedCount: number; failedCount: number } {
+  const assertions: BusinessAssertion[] = Array.isArray(arg2) ? arg2 : (arg3 || []);
   const results: AssertionEvaluationResult[] = [];
 
   for (const rule of assertions) {
     const col = rule.column;
+    const ruleType = (rule as any).ruleType || (rule as any).rule;
     let passedCount = 0;
     let failedCount = 0;
     const sampleViolations: { rowIndex: number; value: any; rowSummary: Record<string, any> }[] = [];
 
     // Pre-calculate unique set if uniqueness check
     const valueCounts = new Map<any, number>();
-    if (rule.ruleType === 'unique') {
+    if (ruleType === 'unique') {
       for (const row of data) {
         const v = row[col];
         if (!isNullOrEmpty(v)) {
@@ -322,17 +326,25 @@ export function evaluateBusinessAssertions(
       const val = row[col];
       let isPassing = true;
 
-      if (rule.ruleType === 'not_null') {
+      if (ruleType === 'not_null') {
         isPassing = !isNullOrEmpty(val);
-      } else if (rule.ruleType === 'positive') {
+      } else if (ruleType === 'positive') {
         const parsed = parseCleanNumber(val);
         isPassing = parsed.isNum && parsed.value > 0;
-      } else if (rule.ruleType === 'non_negative') {
+      } else if (ruleType === 'non_negative') {
         const parsed = parseCleanNumber(val);
         isPassing = parsed.isNum && parsed.value >= 0;
-      } else if (rule.ruleType === 'unique') {
+      } else if (ruleType === 'min') {
+        const parsed = parseCleanNumber(val);
+        const threshold = (rule as any).threshold ?? rule.minValue ?? 0;
+        isPassing = parsed.isNum && parsed.value >= threshold;
+      } else if (ruleType === 'max') {
+        const parsed = parseCleanNumber(val);
+        const threshold = (rule as any).threshold ?? rule.maxValue ?? 0;
+        isPassing = parsed.isNum && parsed.value <= threshold;
+      } else if (ruleType === 'unique') {
         isPassing = !isNullOrEmpty(val) && (valueCounts.get(val) || 0) <= 1;
-      } else if (rule.ruleType === 'range') {
+      } else if (ruleType === 'range') {
         const parsed = parseCleanNumber(val);
         if (!parsed.isNum) {
           isPassing = false;
@@ -341,7 +353,7 @@ export function evaluateBusinessAssertions(
           const max = rule.maxValue !== undefined ? rule.maxValue : Infinity;
           isPassing = parsed.value >= min && parsed.value <= max;
         }
-      } else if (rule.ruleType === 'allowed_values' && rule.allowedList) {
+      } else if (ruleType === 'allowed_values' && rule.allowedList) {
         const sVal = String(val ?? '').trim().toLowerCase();
         const allowed = rule.allowedList.map(item => String(item).trim().toLowerCase());
         isPassing = allowed.includes(sVal);
@@ -419,6 +431,16 @@ export function evaluateBusinessAssertions(
     });
   }
 
-  return results;
+  const hasFail = results.some(r => r.status === 'failed');
+  const hasWarn = results.some(r => r.status === 'warning');
+  const overallStatus: 'pass' | 'warn' | 'fail' = hasFail ? 'fail' : hasWarn ? 'warn' : 'pass';
+
+  const out: any = [...results];
+  out.results = results;
+  out.overallStatus = overallStatus;
+  out.passedCount = results.filter(r => r.status === 'passed').length;
+  out.failedCount = results.filter(r => r.status === 'failed').length;
+
+  return out;
 }
 

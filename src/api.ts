@@ -7,6 +7,7 @@ import {
   DataQualityAudit,
   DatasetListItem,
   DatasetProfile,
+  ExecutiveReport,
   InsightItem,
   OutlierDrilldownResult,
   TransformRequest,
@@ -303,4 +304,16 @@ export async function fetchDataDictionary(
   if (!json.success) throw new Error(json.error?.message || 'Failed to generate data dictionary');
   return json.data;
 }
+
+export async function fetchExecutiveReport(datasetId: string, useAi = true): Promise<ExecutiveReport> {
+  const res = await fetch(`/api/report/${datasetId}`, {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ useAi }),
+  });
+  const json = await res.json();
+  if (!json.success) throw new Error(json.error?.message || 'Failed to generate executive report');
+  return json.data;
+}
+
 

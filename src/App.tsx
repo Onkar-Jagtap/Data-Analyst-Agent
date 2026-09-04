@@ -25,6 +25,7 @@ import { Header } from './components/Header.js';
 import { Sidebar } from './components/Sidebar.js';
 import { OverviewView } from './components/OverviewView.js';
 import { DashboardView } from './components/DashboardView.js';
+import { ExecutiveReportView } from './components/ExecutiveReportView.js';
 import { ProfileView } from './components/ProfileView.js';
 import { QualityView } from './components/QualityView.js';
 import { InsightsView } from './components/InsightsView.js';
@@ -78,17 +79,27 @@ export default function App() {
     } catch (e) {}
   }, [pinnedCharts]);
 
-  const handlePinChart = (chart: any, title: string) => {
+  const handlePinChart = (chartOrObject: any, titleOrSubtitle?: string) => {
+    let pinTitle = 'Pinned Visualization';
+    let chartPayload = chartOrObject;
+
+    if (chartOrObject && typeof chartOrObject === 'object' && chartOrObject.chart) {
+      chartPayload = chartOrObject.chart;
+      pinTitle = chartOrObject.title || titleOrSubtitle || 'Pinned Visualization';
+    } else if (typeof titleOrSubtitle === 'string' && titleOrSubtitle.trim()) {
+      pinTitle = titleOrSubtitle.trim();
+    }
+
     const newPin: PinnedChart = {
-      id: `pin-${Date.now()}`,
-      title,
-      chart,
+      id: (chartOrObject && chartOrObject.id) || `pin-${Date.now()}`,
+      title: pinTitle,
+      chart: chartPayload,
       pinnedAt: new Date().toISOString(),
     };
-    setPinnedCharts(prev => [newPin, ...prev]);
+    setPinnedCharts(prev => [newPin, ...prev.filter(p => p.id !== newPin.id)]);
     setNotification({
       type: 'success',
-      message: `Pinned "${title}" to Executive BI Dashboard!`,
+      message: `Pinned "${pinTitle}" to Executive BI Dashboard!`,
     });
   };
 
@@ -340,6 +351,13 @@ export default function App() {
                   />
                 )}
 
+                {activeTab === 'report' && (
+                  <ExecutiveReportView
+                    profile={profile}
+                    onNavigateTab={setActiveTab}
+                  />
+                )}
+
                 {activeTab === 'profile' && (
                   <ProfileView
                     profile={profile}
@@ -381,6 +399,7 @@ export default function App() {
                     history={queryHistory}
                     onAskQuestion={handleAskQuestion}
                     onSelectHistoryItem={setActiveQueryResult}
+                    onPinChart={handlePinChart}
                   />
                 )}
 

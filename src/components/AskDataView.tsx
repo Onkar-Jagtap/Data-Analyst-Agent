@@ -11,6 +11,7 @@ import {
   Info,
   LineChart,
   MessageSquareCode,
+  Pin,
   RotateCcw,
   Send,
   ShieldCheck,
@@ -29,6 +30,7 @@ interface AskDataViewProps {
   history: AnalysisResult[];
   onAskQuestion: (question: string) => void;
   onSelectHistoryItem: (item: AnalysisResult) => void;
+  onPinChart?: (chart: any, title?: string) => void;
 }
 
 export const AskDataView: React.FC<AskDataViewProps> = ({
@@ -38,6 +40,7 @@ export const AskDataView: React.FC<AskDataViewProps> = ({
   history,
   onAskQuestion,
   onSelectHistoryItem,
+  onPinChart,
 }) => {
   const [questionInput, setQuestionInput] = useState('');
   const [showPlanRaw, setShowPlanRaw] = useState(false);
@@ -193,6 +196,17 @@ export const AskDataView: React.FC<AskDataViewProps> = ({
                 <CheckCircle2 className="w-3 h-3" />
                 <span>Deterministic Math Verified</span>
               </span>
+
+              {activeResult.chart && onPinChart && (
+                <button
+                  onClick={() => onPinChart(activeResult.chart, activeResult.question)}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-xs font-medium text-blue-300 transition-colors shadow-sm"
+                  title="Pin this visualization to BI Dashboard"
+                >
+                  <Pin className="w-3.5 h-3.5" />
+                  <span>Pin to Dashboard</span>
+                </button>
+              )}
 
               <button
                 onClick={handleOpenCodeModal}

@@ -35,6 +35,19 @@ export interface ColumnProfile {
   // Quality & anomaly notes
   suspiciousValuesCount?: number;
   suspiciousReasons?: string[];
+  stats?: {
+    min?: number;
+    max?: number;
+    mean?: number;
+    median?: number;
+    std?: number;
+    stdDev?: number;
+    variance?: number;
+    sum?: number;
+    q1?: number;
+    q3?: number;
+    iqr?: number;
+  };
 }
 
 export interface DatasetProfile {
@@ -44,6 +57,7 @@ export interface DatasetProfile {
   columnCount: number;
   memoryEstimateKb: number;
   duplicateRowCount: number;
+  duplicateRowsCount?: number;
   duplicatePercentage: number;
   totalMissingCells: number;
   missingPercentage: number;
@@ -83,6 +97,8 @@ export interface QualityIssue {
 export interface DataQualityAudit {
   datasetId: string;
   score: number; // 0 - 100
+  overallScore?: number;
+  duplicateRowsCount?: number;
   rating: 'Excellent' | 'Good' | 'Fair' | 'Poor' | 'Critical';
   compliance?: ComplianceAudit;
   scoreBreakdown: {
@@ -128,6 +144,7 @@ export interface OutlierDrilldownItem {
 
 export interface OutlierDrilldownResult {
   column: string;
+  totalOutliers?: number;
   bounds: {
     q1: number;
     q3: number;
@@ -265,7 +282,14 @@ export type TransformAction =
   | 'text_case';
 
 export interface TransformRequest {
-  action: TransformAction;
+  action?: TransformAction;
+  type?: string;
+  targetColumn?: string;
+  sourceColumn?: string;
+  formula?: string;
+  findValue?: string;
+  replaceValue?: string;
+  datePart?: string;
   // For calculated column
   newColumnName?: string;
   calcMode?: 'binary_op' | 'expression' | 'condition';
@@ -303,10 +327,10 @@ export interface TransformRequest {
 
 export interface BusinessAssertion {
   id: string;
-  name: string;
+  name?: string;
   description?: string;
   column: string;
-  ruleType:
+  ruleType?:
     | 'range'
     | 'positive'
     | 'non_negative'
@@ -315,7 +339,12 @@ export interface BusinessAssertion {
     | 'allowed_values'
     | 'regex'
     | 'date_comparison'
-    | 'column_comparison';
+    | 'column_comparison'
+    | 'min'
+    | 'max';
+  rule?: 'min' | 'max' | 'range' | 'not_null' | 'unique' | 'positive' | 'non_negative' | string;
+  threshold?: number;
+  severity?: 'critical' | 'warning' | 'info';
   operator?: '>' | '>=' | '<' | '<=' | '==' | '!=' | 'between' | 'in';
   expectedValue?: any;
   minValue?: number;
@@ -335,4 +364,93 @@ export interface AssertionEvaluationResult {
   status: 'passed' | 'warning' | 'failed';
   sampleViolations: { rowIndex: number; value: any; rowSummary: Record<string, any> }[];
 }
+
+export interface BusinessCalculations {
+  totalRevenue: number;
+  totalRevenueFormatted: string;
+  totalProfit: number;
+  totalProfitFormatted: string;
+  profitMarginPct: number;
+  profitMarginFormatted: string;
+  averageOrderValue: number;
+  averageOrderValueFormatted: string;
+  topSegmentName: string;
+  topSegmentRevenue: number;
+  topSegmentSharePct: number;
+  topSegmentShareFormatted: string;
+  paretoTop20SharePct: number;
+  paretoTop20ShareFormatted: string;
+  periodGrowthPct: number | null;
+  periodGrowthFormatted: string;
+  refundAdjustmentCount: number;
+  refundAdjustmentTotal: number;
+  refundAdjustmentFormatted: string;
+  efficiencyRatio: number;
+  efficiencyRatioFormatted: string;
+}
+
+export interface StrategicActionItem {
+  id: string;
+  category: 'Immediate 30-Day' | '60-90 Day Optimization' | 'Governance & Data Quality' | 'Risk & Sensitivity';
+  title: string;
+  action: string;
+  expectedImpact: string;
+  priority: 'Critical' | 'High' | 'Medium';
+  responsibleRole: string;
+}
+
+export interface ReportVisualSection {
+  id: string;
+  title: string;
+  subtitle: string;
+  businessInterpretation: string;
+  keyTakeaway: string;
+  chart: any;
+  chartType: string;
+}
+
+export interface ExecutiveReport {
+  generatedAt: string;
+  datasetName: string;
+  datasetId: string;
+  datasetScale: {
+    rows: number;
+    columns: number;
+    completenessScore: number;
+    primaryDomain: string;
+  };
+  executiveBrief: {
+    headline: string;
+    overview: string;
+    macroContext: string;
+    strengths: string[];
+    risks: string[];
+    aiGenerated?: boolean;
+  };
+  businessEconomics: BusinessCalculations;
+  kpis: {
+    title: string;
+    value: string;
+    subValue?: string;
+    trend?: 'up' | 'down' | 'neutral';
+    trendValue?: string;
+    status: 'good' | 'warning' | 'neutral' | 'danger';
+  }[];
+  visualSections: ReportVisualSection[];
+  dataQualityHealth: {
+    overallScore: number;
+    status: 'Excellent' | 'Good' | 'Needs Attention';
+    totalRows: number;
+    duplicateRows: number;
+    outlierCount: number;
+    nullRate: number;
+    complianceNote: string;
+  };
+  actionPlan: StrategicActionItem[];
+  reproducibleScript: {
+    python: string;
+    sql: string;
+  };
+}
+
 

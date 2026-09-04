@@ -356,7 +356,14 @@ export function performTransformation(
 
   // 6. DATE EXTRACTION
   else if (action === 'date_extract') {
-    const col = rawReq.column || rawReq.sourceColumn;
+    let col = rawReq.column || rawReq.sourceColumn;
+    if (data.length > 0 && !(col in data[0])) {
+      const keys = Object.keys(data[0]);
+      const matched = keys.find(k => k.toLowerCase() === String(col).toLowerCase() || k.toLowerCase().includes(String(col).toLowerCase()) || String(col).toLowerCase().includes(k.toLowerCase()));
+      if (matched) {
+        col = matched;
+      }
+    }
     const targetCol = (rawReq.newColumnName || rawReq.targetColumn || `${col}_Extracted`).trim();
     const datePart = rawReq.datePart || 'year';
     newColumnNames.push(targetCol);

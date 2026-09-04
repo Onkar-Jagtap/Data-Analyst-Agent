@@ -17,9 +17,20 @@ interface TestResult {
 
 const results: TestResult[] = [];
 
-function recordTest(suite: string, name: string, fn: () => void | Promise<void>) {
+function recordTest(suite: string, nameOrFn: string | (() => void | Promise<void>), fn?: () => void | Promise<void>) {
+  let name = '';
+  let testFn: () => void | Promise<void>;
+
+  if (typeof nameOrFn === 'function') {
+    testFn = nameOrFn;
+    name = suite;
+  } else {
+    name = nameOrFn;
+    testFn = fn!;
+  }
+
   try {
-    const res = fn();
+    const res = testFn();
     if (res instanceof Promise) {
       return res
         .then(() => {

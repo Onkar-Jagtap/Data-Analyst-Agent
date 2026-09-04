@@ -984,6 +984,7 @@ export function getOutlierDrilldown(
 
   return {
     column: targetCol,
+    totalOutliers: outliers.length,
     bounds: {
       q1: Math.round(q1 * 100) / 100,
       q3: Math.round(q3 * 100) / 100,

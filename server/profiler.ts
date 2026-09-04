@@ -313,6 +313,7 @@ export function computeNumericStats(numbers: number[]) {
     mean: Math.round(mean * 1000) / 1000,
     median: Math.round(median * 1000) / 1000,
     std: Math.round(std * 1000) / 1000,
+    stdDev: Math.round(std * 1000) / 1000,
     variance: Math.round(variance * 1000) / 1000,
     q1: Math.round(q1 * 1000) / 1000,
     q3: Math.round(q3 * 1000) / 1000,
@@ -324,7 +325,7 @@ export function computeNumericStats(numbers: number[]) {
   };
 }
 
-export function profileDataset(data: Record<string, any>[], filename: string, datasetId: string): DatasetProfile {
+export function profileDataset(data: Record<string, any>[], filename: string, datasetId: string, _optionalLimit?: number): DatasetProfile {
   const rowCount = data.length;
   if (rowCount === 0) {
     return {
@@ -420,6 +421,19 @@ export function profileDataset(data: Record<string, any>[], filename: string, da
 
       const numStats = computeNumericStats(numbers);
       Object.assign(profile, numStats);
+      profile.stats = {
+        min: numStats.min,
+        max: numStats.max,
+        mean: numStats.mean,
+        median: numStats.median,
+        std: numStats.std,
+        stdDev: numStats.stdDev,
+        variance: numStats.variance,
+        sum: numStats.sum,
+        q1: numStats.q1,
+        q3: numStats.q3,
+        iqr: numStats.iqr,
+      };
 
       if (suspiciousNegatives > 0) {
         profile.suspiciousValuesCount = suspiciousNegatives;
@@ -482,6 +496,7 @@ export function profileDataset(data: Record<string, any>[], filename: string, da
     columnCount,
     memoryEstimateKb,
     duplicateRowCount,
+    duplicateRowsCount: duplicateRowCount,
     duplicatePercentage,
     totalMissingCells,
     missingPercentage,

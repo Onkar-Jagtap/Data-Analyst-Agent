@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
+import { StudioLogo } from './StudioLogo.js';
 import { DatasetListItem, DatasetProfile } from '../types.js';
 
 interface HeaderProps {
@@ -55,20 +56,20 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Brand & Dataset Switcher */}
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/25">
-            <BarChart2 className="w-4 h-4" />
+          <div className="w-9 h-9 rounded-xl bg-slate-900/90 border border-slate-700/80 flex items-center justify-center p-1 shadow-md shadow-blue-500/10 hover:border-blue-500/50 transition-colors">
+            <StudioLogo size={24} />
           </div>
           <div className="flex flex-col">
             <div className="flex items-center gap-1.5">
-              <span className="font-bold text-sm tracking-tight text-slate-100 font-display">Data Analyst Agent</span>
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-gradient-to-r from-blue-500/20 to-indigo-500/20 text-blue-300 border border-blue-500/30">
+              <span className="font-bold text-sm sm:text-base tracking-tight text-slate-100 font-display">Data Studio</span>
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-gradient-to-r from-blue-500/20 via-indigo-500/20 to-purple-500/20 text-blue-300 border border-blue-500/30">
                 by PJA
               </span>
               <span className="hidden xl:inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-900 text-emerald-400 border border-emerald-900/40">
                 <Lock className="w-2.5 h-2.5" /> Isolated Session
               </span>
             </div>
-            <span className="text-[11px] text-slate-400">Autonomous Data Science & Deterministic Analytics</span>
+            <span className="text-[11px] text-slate-400">Autonomous Business Intelligence & Deterministic Analytics</span>
           </div>
         </div>
 

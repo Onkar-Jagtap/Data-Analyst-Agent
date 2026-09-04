@@ -18,8 +18,9 @@ import { generatePlotlyFigure } from './server/charts.js';
 import { performDataCleaning } from './server/cleaner.js';
 import { performTransformation } from './server/transformer.js';
 import { evaluateBusinessAssertions } from './server/quality.js';
-import { isNullOrEmpty, parseCleanNumber } from './server/profiler.js';
+import { isNullOrEmpty, parseCleanNumber, profileDataset } from './server/profiler.js';
 import { computeDashboardData } from './server/dashboard.js';
+import { generateExecutiveReport } from './server/report.js';
 import { AnalysisResult, BusinessAssertion, TransformRequest } from './server/types.js';
 
 dotenv.config();
@@ -75,7 +76,7 @@ const upload = multer({
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    app: 'Data Analyst Agent by PJA',
+    app: 'Data Studio by PJA',
     timestamp: new Date().toISOString(),
     geminiConfigured: !!process.env.GEMINI_API_KEY,
   });
@@ -276,6 +277,40 @@ app.get('/api/dashboard/:id', (req, res) => {
   } catch (err: any) {
     console.error('Error computing dashboard data:', err);
     res.status(500).json({ success: false, error: { message: err.message || 'Failed to compute dashboard analytics.' } });
+  }
+});
+
+// Executive Business Intelligence & Strategy Report Endpoint
+app.get('/api/report/:id', async (req, res) => {
+  const sid = getSessionId(req);
+  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  if (!dataset) {
+    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+  }
+
+  try {
+    const report = await generateExecutiveReport(dataset.profile, dataset.rawRows, { useAi: true });
+    res.json({ success: true, data: report });
+  } catch (err: any) {
+    console.error('Error generating executive report:', err);
+    res.status(500).json({ success: false, error: { message: err.message || 'Failed to generate executive report.' } });
+  }
+});
+
+app.post('/api/report/:id', async (req, res) => {
+  const sid = getSessionId(req);
+  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  if (!dataset) {
+    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+  }
+
+  const { useAi } = req.body || {};
+  try {
+    const report = await generateExecutiveReport(dataset.profile, dataset.rawRows, { useAi: useAi !== false });
+    res.json({ success: true, data: report });
+  } catch (err: any) {
+    console.error('Error generating executive report:', err);
+    res.status(500).json({ success: false, error: { message: err.message || 'Failed to generate executive report.' } });
   }
 });
 
@@ -850,11 +885,11 @@ app.post('/api/transform/:id', (req, res) => {
     const body = req.body || {};
     let action = body.action || body.type;
     if (action === 'formula') action = 'calculated_column';
-    if (action === 'date_extract') action = 'text_case';
 
     const transformReq: TransformRequest = {
       ...body,
       action: action as any,
+      calcMode: body.calcMode || (body.expression || body.formula ? 'expression' : body.calcMode),
       newColumnName: body.newColumnName || body.targetColumn,
       expression: body.expression || body.formula,
       column: body.column || body.sourceColumn || body.targetColumn,
@@ -866,6 +901,7 @@ app.post('/api/transform/:id', (req, res) => {
 
     // Update dataset and record undo snapshot
     const updated = datasetStore.updateExistingDataset(sid, dataset.id, result.transformedData);
+    const updatedProfile = updated?.profile || profileDataset(result.transformedData, dataset.filename, dataset.id);
 
     res.json({
       success: true,
@@ -875,7 +911,7 @@ app.post('/api/transform/:id', (req, res) => {
         rowsAffected: result.rowsAffected,
         newColumnNames: result.newColumnNames,
         previewDifferences: result.previewDifferences,
-        profile: updated?.profile,
+        profile: updatedProfile,
         canUndo: datasetStore.canUndo(sid, dataset.id),
       },
     });
@@ -996,7 +1032,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Data Analyst Agent by PJA server running on http://0.0.0.0:${PORT}`);
+    console.log(`Data Studio by PJA server running on http://0.0.0.0:${PORT}`);
   });
 }
 

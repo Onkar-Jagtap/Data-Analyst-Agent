@@ -1,6 +1,6 @@
 {
-  "name": "Data Analyst Agent by PJA",
-  "description": "Enterprise-grade AI exploratory data analysis platform with deterministic computation, privacy shield, session isolation, Plotly visual analytics, and reproducible Python/SQL code export by PJA.",
+  "name": "Data Studio by PJA",
+  "description": "Enterprise-grade autonomous business intelligence and exploratory data analysis studio featuring deterministic computation, privacy shield, session isolation, Plotly visual analytics, and reproducible Python/SQL code export by PJA.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

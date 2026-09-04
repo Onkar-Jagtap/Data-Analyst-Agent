@@ -6,13 +6,16 @@ import {
   BarChart3,
   Calendar,
   ChevronDown,
+  DollarSign,
   Download,
+  FileText,
   Filter,
   Grid,
   Layers,
   LayoutDashboard,
   LineChart,
   Maximize2,
+  Percent,
   PieChart,
   Pin,
   RefreshCw,
@@ -140,6 +143,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => onNavigateTab('report')}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white transition-all shadow-sm shadow-emerald-500/20"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Generate Full Report</span>
+          </button>
           <button
             onClick={loadDashboard}
             disabled={loading}
@@ -362,6 +372,83 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               {(data.metrics?.filteredRowCount ?? data.activeRowsCount) === (data.metrics?.totalRowCount ?? data.totalDatasetRows)
                 ? '100% of entire dataset'
                 : `${(((data.metrics?.filteredRowCount ?? data.activeRowsCount) / ((data.metrics?.totalRowCount ?? data.totalDatasetRows) || 1)) * 100).toFixed(1)}% filtered`}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Executive Business Calculations Bar */}
+      {data && (
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-900/90 via-slate-900/80 to-blue-950/20 border border-slate-800 shadow-md">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+                Executive Business Metrics & Economics
+              </span>
+            </div>
+            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-2 py-0.5 rounded-md">
+              Deterministic Calculations Active
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {/* 1. Profit Margin */}
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+              <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Profit Margin</span>
+              <div className="text-sm sm:text-base font-bold text-emerald-400 font-mono mt-0.5">
+                {data.businessCalculations?.profitMarginFormatted || data.metrics?.profitMarginFormatted || 'N/A'}
+              </div>
+              <span className="text-[10px] text-slate-500 truncate block mt-0.5">Net Profit / Revenue</span>
+            </div>
+
+            {/* 2. Average Order Value / ATV */}
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+              <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Avg Deal / AOV</span>
+              <div className="text-sm sm:text-base font-bold text-blue-300 font-mono mt-0.5">
+                {data.businessCalculations?.averageOrderValueFormatted || data.metrics?.averageOrderValueFormatted || '0'}
+              </div>
+              <span className="text-[10px] text-slate-500 truncate block mt-0.5">Revenue / Order</span>
+            </div>
+
+            {/* 3. Top Contributor */}
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+              <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Top Segment</span>
+              <div className="text-sm sm:text-base font-bold text-amber-300 truncate mt-0.5" title={data.businessCalculations?.topSegmentName || data.metrics?.topSegmentName}>
+                {data.businessCalculations?.topSegmentName || data.metrics?.topSegmentName || 'N/A'}
+              </div>
+              <span className="text-[10px] text-slate-500 truncate block mt-0.5">
+                {data.businessCalculations?.topSegmentShareFormatted || data.metrics?.topSegmentShareFormatted || '0%'} total share
+              </span>
+            </div>
+
+            {/* 4. Pareto 80/20 Concentration */}
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+              <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Pareto Top 20%</span>
+              <div className="text-sm sm:text-base font-bold text-purple-300 font-mono mt-0.5">
+                {data.businessCalculations?.paretoTop20ShareFormatted || data.metrics?.paretoTop20ShareFormatted || '0%'}
+              </div>
+              <span className="text-[10px] text-slate-500 truncate block mt-0.5">Share from top 20%</span>
+            </div>
+
+            {/* 5. Period Growth */}
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+              <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Period Trend</span>
+              <div className="text-sm sm:text-base font-bold text-cyan-300 font-mono mt-0.5">
+                {data.businessCalculations?.periodGrowthFormatted || data.metrics?.periodGrowthFormatted || 'Steady'}
+              </div>
+              <span className="text-[10px] text-slate-500 truncate block mt-0.5">Latest vs prior cycle</span>
+            </div>
+
+            {/* 6. Returns / Adjustments */}
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+              <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Adjustments</span>
+              <div className="text-sm sm:text-base font-bold text-slate-200 font-mono mt-0.5">
+                {data.businessCalculations?.refundAdjustmentFormatted || data.metrics?.refundAdjustmentTotalFormatted || '$0'}
+              </div>
+              <span className="text-[10px] text-slate-500 truncate block mt-0.5">
+                {(data.businessCalculations?.refundAdjustmentCount || data.metrics?.refundAdjustmentCount || 0)} return rows
+              </span>
             </div>
           </div>
         </div>

@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Database,
   FileSpreadsheet,
+  FileText,
   HelpCircle,
   LayoutGrid,
   LineChart,
@@ -76,24 +77,31 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={() => onNavigateTab('report')}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white transition-colors shadow-sm shadow-emerald-500/20"
+          >
+            <FileText className="w-4 h-4" />
+            <span>Generate Full Report</span>
+          </button>
           <button
             onClick={() => onNavigateTab('dashboard')}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors shadow-sm shadow-indigo-500/20"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors shadow-sm shadow-indigo-500/20"
           >
             <LayoutGrid className="w-4 h-4" />
             <span>BI Dashboard</span>
           </button>
           <button
             onClick={() => onNavigateTab('ask')}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white transition-colors shadow-sm shadow-blue-500/20"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white transition-colors shadow-sm shadow-blue-500/20"
           >
             <MessageSquareCode className="w-4 h-4" />
             <span>Ask Data</span>
           </button>
           <button
             onClick={() => onNavigateTab('studio')}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 transition-colors"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 transition-colors"
           >
             <BarChart3 className="w-4 h-4" />
             <span>Visual Studio</span>
