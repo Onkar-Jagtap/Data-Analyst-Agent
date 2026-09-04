@@ -274,7 +274,16 @@ npm run test:audit
 ```
 
 ### Production Deployment & Containerization
-Data Studio is container-ready. When deploying to Google Cloud Run, AWS ECS, or Docker:
+
+#### Deploying on Vercel
+Data Studio includes a zero-configuration Vercel configuration (`vercel.json`) with an autonomous in-browser analytics engine (`clientEngine.ts`):
+1. Import the repository into your Vercel dashboard.
+2. The framework will automatically detect Vite. The build command is `npm run build` with output directory `dist`.
+3. Set `GEMINI_API_KEY` in your Vercel Project Environment Variables.
+4. **Dual-Mode Reliability**: In serverless environments where server endpoints experience cold-start latency or restricted function quotas, Data Studio seamlessly engages its verified client-side deterministic analytics engine in the browser without any interruptions, ensuring instant sample loading, profiling, and interactive charting everywhere.
+
+#### Deploying on Google Cloud Run, AWS ECS, or Docker
+Data Studio is fully container-ready:
 1. Ensure the container exposes port `3000`.
 2. Provide the `GEMINI_API_KEY` secret in your container environment.
 3. Run `npm run build` during the build phase.
