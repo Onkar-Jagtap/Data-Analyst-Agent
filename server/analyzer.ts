@@ -9,6 +9,7 @@ import {
   OutlierDrilldownResult,
 } from './types.js';
 import { isNullOrEmpty, parseCleanNumber, parseDateSafe } from './profiler.js';
+import { resolveColumn } from './query_resolver.js';
 
 export interface ExecutionOutput {
   success: boolean;
@@ -196,6 +197,36 @@ export function executeAnalysisPlan(
     };
   }
 
+  // Check clarification operation
+  if (plan.operation === 'clarification') {
+    return {
+      success: false,
+      operation: 'clarification',
+      data: null,
+      summaryMetrics: [],
+      methodDescription: plan.user_intent_summary || 'Query clarification needed.',
+      dataHandling: {
+        totalRows,
+        validRowsAnalyzed: 0,
+        excludedRows: 0,
+        missingValuesExcluded: 0,
+        invalidValuesExcluded: 0,
+        filteredOutRows: 0,
+        methodDescription: 'Clarification required to proceed without guessing',
+        rulesApplied: ['Safety Guard: Ambiguous request halted to prevent guessing'],
+        warnings: [plan.user_intent_summary || 'Please clarify your query.'],
+        confidenceScore: 0,
+        isDeterministic: true,
+      },
+      warnings: [plan.user_intent_summary || 'Please clarify your query.'],
+      error: {
+        code: 'CLARIFICATION_REQUIRED',
+        message: plan.user_intent_summary || 'Please clarify which metric or dimension you would like to analyze.',
+        suggestion: plan.user_intent_summary,
+      },
+    };
+  }
+
   // 1. Apply user filters first
   const { filteredRows, filteredOutCount } = applyFilters(rawRows, plan.filters);
   if (filteredOutCount > 0) {
@@ -232,25 +263,24 @@ export function executeAnalysisPlan(
     };
   }
 
-  // Match columns safely
-  const findColumn = (colName?: string): string | null => {
+  // Match columns safely using deterministic resolver hierarchy
+  const findColumn = (colName?: string, typeFilter?: 'numeric' | 'categorical' | 'datetime'): string | null => {
     if (!colName) return null;
-    const exact = profile.columns.find(c => c.name.toLowerCase() === colName.toLowerCase());
-    if (exact) return exact.name;
-    const partial = profile.columns.find(c => c.name.toLowerCase().includes(colName.toLowerCase()) || colName.toLowerCase().includes(c.name.toLowerCase()));
-    return partial ? partial.name : null;
+    const res = resolveColumn(colName, profile.columns, typeFilter ? { typeFilter } : undefined);
+    return res?.column ? res.column.name : null;
   };
 
-  const metricCol = findColumn(plan.metric);
+  const metricCol = findColumn(plan.metric, 'numeric') || findColumn(plan.metric);
   const isCurrency = metricCol ? ['revenue', 'sales', 'profit', 'cost', 'price', 'amount'].some(w => metricCol.toLowerCase().includes(w)) : false;
+  const numCols = profile.columns.filter(c => c.type === 'numeric');
 
   // ----------------------------------------------------
-  // OPERATION: GROUP AGGREGATE
+  // OPERATION: GROUP AGGREGATE / RANKING
   // ----------------------------------------------------
-  if (plan.operation === 'group_aggregate') {
+  if (plan.operation === 'group_aggregate' || plan.operation === 'ranking') {
     const rawGroupCols = plan.group_by || [];
     const groupCol = findColumn(rawGroupCols[0]) || profile.columns.find(c => c.type === 'categorical')?.name || profile.columns[0].name;
-    const targetMetric = metricCol || profile.columns.find(c => c.type === 'numeric')?.name;
+    const targetMetric = metricCol || (numCols.length === 1 ? numCols[0].name : null);
     const agg = plan.aggregation || 'sum';
 
     if (!targetMetric) {
@@ -259,7 +289,7 @@ export function executeAnalysisPlan(
         operation: 'group_aggregate',
         data: null,
         summaryMetrics: [],
-        methodDescription: 'No numeric metric found for aggregation.',
+        methodDescription: 'Ambiguous or missing numeric metric for aggregation.',
         dataHandling: {
           totalRows,
           validRowsAnalyzed: 0,
@@ -267,18 +297,21 @@ export function executeAnalysisPlan(
           missingValuesExcluded: 0,
           invalidValuesExcluded: 0,
           filteredOutRows: filteredOutCount,
-          methodDescription: 'Missing numeric metric',
+          methodDescription: 'Missing or ambiguous numeric metric',
           rulesApplied,
-          warnings: ['No numeric metric column available in dataset.'],
+          warnings: ['Cannot group aggregate without a specific numeric metric.'],
           confidenceScore: 0,
           isDeterministic: true,
         },
-        warnings: ['Cannot group aggregate without a numeric metric.'],
+        warnings: ['Cannot group aggregate without a specific numeric metric.'],
         error: {
-          code: 'NO_NUMERIC_COLUMN',
-          message: `Could not find a numeric metric to aggregate.`,
-          reason: `Requested metric '${plan.metric || 'unknown'}' is not numeric.`,
-          suggestion: `Select one of the numeric columns: ${profile.columns.filter(c => c.type === 'numeric').map(c => c.name).join(', ')}.`,
+          code: numCols.length > 1 ? 'AMBIGUOUS_METRIC' : 'NO_NUMERIC_COLUMN',
+          message:
+            numCols.length > 1
+              ? `Which metric would you like to break down by ${groupCol}? Available metrics: ${numCols.map(c => c.name).join(', ')}.`
+              : `Could not find a numeric metric to aggregate.`,
+          reason: `Requested metric '${plan.metric || 'unknown'}' could not be resolved to a numeric column.`,
+          suggestion: `Select one of the numeric columns: ${numCols.map(c => c.name).join(', ')}.`,
         },
       };
     }
@@ -743,8 +776,40 @@ export function executeAnalysisPlan(
   // ----------------------------------------------------
   // OPERATION: AGGREGATE / SINGLE METRIC STATS
   // ----------------------------------------------------
-  const targetMetric = metricCol || profile.columns.find(c => c.type === 'numeric')?.name || profile.columns[0].name;
+  const targetMetric = metricCol || (numCols.length === 1 ? numCols[0].name : null);
   const agg = plan.aggregation || 'mean';
+
+  if (!targetMetric) {
+    return {
+      success: false,
+      operation: 'aggregate',
+      data: null,
+      summaryMetrics: [],
+      methodDescription: 'Ambiguous or missing numeric metric for calculation.',
+      dataHandling: {
+        totalRows,
+        validRowsAnalyzed: 0,
+        excludedRows: totalRows,
+        missingValuesExcluded: 0,
+        invalidValuesExcluded: 0,
+        filteredOutRows: filteredOutCount,
+        methodDescription: 'Ambiguous metric prevented guessing arbitrary column',
+        rulesApplied,
+        warnings: ['Multiple numeric columns exist; specify which to aggregate.'],
+        confidenceScore: 0,
+        isDeterministic: true,
+      },
+      warnings: ['Clarification required: specify metric column.'],
+      error: {
+        code: numCols.length > 1 ? 'AMBIGUOUS_METRIC' : 'NO_NUMERIC_COLUMN',
+        message:
+          numCols.length > 1
+            ? `Which metric would you like to calculate? Available numeric metrics: ${numCols.map(c => c.name).join(', ')}.`
+            : `No numeric columns found in dataset to calculate.`,
+        suggestion: `Select one of: ${numCols.map(c => c.name).join(', ')}.`,
+      },
+    };
+  }
 
   let missingCount = 0;
   let invalidCount = 0;

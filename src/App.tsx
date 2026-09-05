@@ -221,14 +221,26 @@ export default function App() {
     setActiveTab('ask');
     setQueryLoading(true);
     try {
-      const result = await askDataQuery(profile.id, question);
+      const historyContext = queryHistory.slice(0, 5).map(h => ({
+        question: h.question,
+        answerSummary: h.answer,
+        plan: h.plan,
+      }));
+      const result = await askDataQuery(profile.id, question, historyContext);
       setActiveQueryResult(result);
       setQueryHistory(prev => [result, ...prev.filter(h => h.question !== question)].slice(0, 15));
       if (!result.success && result.error) {
-        setNotification({
-          message: result.error.message || 'Analytical query failed.',
-          type: 'error',
-        });
+        if (result.error.code === 'CLARIFICATION_REQUIRED' || result.error.code === 'AMBIGUOUS_METRIC') {
+          setNotification({
+            message: 'Clarification needed: please select a specific metric.',
+            type: 'info',
+          });
+        } else {
+          setNotification({
+            message: result.error.message || 'Analytical query could not be computed.',
+            type: 'error',
+          });
+        }
       }
     } catch (err: any) {
       console.error('Query execution error:', err);

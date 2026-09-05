@@ -1,5 +1,12 @@
 import { GoogleGenAI } from '@google/genai';
 import { AnalysisPlan, ColumnProfile, DataHandlingReport, DatasetProfile } from './types.js';
+import {
+  resolveColumn,
+  resolveMetricFromQuery,
+  resolveAggregation,
+  validateAndRepairPlan,
+  applyFollowUpContext,
+} from './query_resolver.js';
 
 let aiClient: GoogleGenAI | null = null;
 
@@ -30,117 +37,121 @@ export function parseIntentDeterministic(
   const catCols = profile.columns.filter(c => c.type === 'categorical' || c.type === 'text');
   const dateCols = profile.columns.filter(c => c.type === 'datetime');
 
-  // Multi-turn context check: if user is asking a follow-up or refinement
-  const isFollowUp = previousPlan && (
-    q.startsWith('now ') ||
-    q.includes('filter') ||
-    q.includes('only ') ||
-    q.includes('break down by') ||
-    q.includes('group by') ||
-    q.includes('what about') ||
-    q.includes('instead')
-  );
+  // Check multi-turn follow-up refinements first if previousPlan exists
+  if (previousPlan) {
+    const isFollowUpPattern =
+      q.startsWith('now ') ||
+      q.startsWith('only ') ||
+      q.startsWith('what about') ||
+      q.includes('instead') ||
+      q.includes('filter') ||
+      q.includes('top ') ||
+      q.includes('limit to') ||
+      q.includes('first ') ||
+      q.includes('this') ||
+      q.includes('that');
 
-  if (isFollowUp && previousPlan) {
-    const cloned: AnalysisPlan = JSON.parse(JSON.stringify(previousPlan));
-
-    // Check if new filter is being applied
-    for (const catCol of catCols) {
-      if (catCol.topCategories) {
-        for (const topCat of catCol.topCategories) {
-          if (q.includes(topCat.category.toLowerCase())) {
-            if (!cloned.filters) cloned.filters = [];
-            cloned.filters.push({
-              column: catCol.name,
-              operator: '==',
-              value: topCat.category,
-            });
-            cloned.user_intent_summary = `Refined previous analysis filtered to ${catCol.name} = '${topCat.category}'.`;
-            return cloned;
-          }
-        }
-      }
-    }
-
-    // Check if new grouping dimension is requested
-    for (const c of [...catCols, ...dateCols]) {
-      if (q.includes(c.name.toLowerCase())) {
-        cloned.group_by = [c.name];
-        if (cloned.visualization) {
-          cloned.visualization.x = c.name;
-          cloned.visualization.title = `${cloned.aggregation?.toUpperCase() || 'SUM'} of ${cloned.metric} by ${c.name}`;
-        }
-        cloned.user_intent_summary = `Refined previous query grouped by ${c.name}.`;
-        return cloned;
+    if (isFollowUpPattern) {
+      const dummyPlan: AnalysisPlan = {
+        operation: previousPlan.operation,
+        metric: previousPlan.metric,
+        group_by: previousPlan.group_by,
+        aggregation: previousPlan.aggregation,
+      };
+      const contextual = applyFollowUpContext(question, dummyPlan, previousPlan, profile);
+      if (contextual !== dummyPlan) {
+        return contextual;
       }
     }
   }
 
-  // Match metric
-  let matchedMetric: string | undefined;
-  if (previousPlan && (q.includes('this') || q.includes('that') || q.includes('it'))) {
-    matchedMetric = previousPlan.metric;
-  }
-  for (const c of numCols) {
-    const colNameLower = c.name.toLowerCase();
-    if (q.includes(colNameLower)) {
-      matchedMetric = c.name;
-      break;
-    }
+  // 1. Safe Metric Resolution
+  const metricRes = resolveMetricFromQuery(question, profile.columns, previousPlan);
+
+  if (metricRes.status === 'ambiguous') {
+    return {
+      operation: 'clarification',
+      metric: undefined,
+      user_intent_summary:
+        metricRes.clarificationMessage ||
+        `Which metric would you like me to analyze: ${numCols.map(c => c.name).join(', ')}?`,
+    };
   }
 
-  // Common synonym mappings
-  if (!matchedMetric) {
-    if (q.includes('sales') || q.includes('turnover') || q.includes('revenue') || q.includes('earning')) {
-      const match = numCols.find(c => {
-        const n = c.name.toLowerCase();
-        return n.includes('revenue') || n.includes('sale') || n.includes('amount');
-      });
-      if (match) matchedMetric = match.name;
-    } else if (q.includes('profit') || q.includes('margin') || q.includes('gain')) {
-      const match = numCols.find(c => c.name.toLowerCase().includes('profit'));
-      if (match) matchedMetric = match.name;
-    } else if (q.includes('quantity') || q.includes('volume') || q.includes('units')) {
-      const match = numCols.find(c => {
-        const n = c.name.toLowerCase();
-        return n.includes('qty') || n.includes('quantity') || n.includes('volume');
-      });
-      if (match) matchedMetric = match.name;
-    } else if (q.includes('cost') || q.includes('expense') || q.includes('spend')) {
-      const match = numCols.find(c => c.name.toLowerCase().includes('cost') || c.name.toLowerCase().includes('spend'));
-      if (match) matchedMetric = match.name;
-    }
-  }
-  if (!matchedMetric && numCols.length > 0) {
-    matchedMetric = numCols[0].name;
+  if (metricRes.status === 'unknown') {
+    return {
+      operation: 'clarification',
+      metric: undefined,
+      user_intent_summary:
+        metricRes.clarificationMessage ||
+        `The requested metric was not found in dataset '${profile.filename}'. Available metrics: ${numCols.map(c => c.name).join(', ')}.`,
+    };
   }
 
-  // Match group by column
+  if (metricRes.status === 'none') {
+    return {
+      operation: 'clarification',
+      metric: undefined,
+      user_intent_summary: 'Your dataset does not contain any numeric metric columns to analyze.',
+    };
+  }
+
+  const matchedMetric = metricRes.metric;
+
+  // 2. Dimension / Group by Resolution using resolver hierarchy
   let matchedGroup: string | undefined;
+
+  // Check direct column matches
   for (const c of [...catCols, ...dateCols]) {
-    const colNameLower = c.name.toLowerCase();
-    if (q.includes(colNameLower)) {
+    const res = resolveColumn(c.name, profile.columns);
+    const colRegex = new RegExp(`\\b${c.name.toLowerCase()}\\b`, 'i');
+    if (colRegex.test(q)) {
       matchedGroup = c.name;
       break;
     }
   }
 
-  // Check category synonyms
+  // Check dimension synonyms
   if (!matchedGroup) {
     if (q.includes('region') || q.includes('country') || q.includes('territory') || q.includes('area') || q.includes('geography')) {
-      const match = catCols.find(c => c.name.toLowerCase().includes('region') || c.name.toLowerCase().includes('country'));
+      const match = catCols.find(c => {
+        const n = c.name.toLowerCase();
+        return n.includes('region') || n.includes('country') || n.includes('territory') || n.includes('area');
+      });
       if (match) matchedGroup = match.name;
     } else if (q.includes('product') || q.includes('item') || q.includes('sku')) {
-      const match = catCols.find(c => c.name.toLowerCase().includes('product') || c.name.toLowerCase().includes('category'));
+      const match = catCols.find(c => {
+        const n = c.name.toLowerCase();
+        return n.includes('product') || n.includes('item') || n.includes('sku');
+      });
       if (match) matchedGroup = match.name;
-    } else if (q.includes('segment') || q.includes('customer') || q.includes('tier')) {
-      const match = catCols.find(c => c.name.toLowerCase().includes('segment') || c.name.toLowerCase().includes('customer'));
+    } else if (q.includes('category') || q.includes('department')) {
+      const match = catCols.find(c => c.name.toLowerCase().includes('category'));
+      if (match) matchedGroup = match.name;
+    } else if (q.includes('segment') || q.includes('customer') || q.includes('tier') || q.includes('client')) {
+      const match = catCols.find(c => {
+        const n = c.name.toLowerCase();
+        return n.includes('segment') || n.includes('customer') || n.includes('client') || n.includes('tier');
+      });
       if (match) matchedGroup = match.name;
     }
   }
 
-  // 1. Time series intent
-  if ((q.includes('trend') || q.includes('over time') || q.includes('monthly') || q.includes('yearly') || q.includes('daily') || q.includes('growth')) && dateCols.length > 0) {
+  // 3. Semantic Aggregation & Direction
+  const aggResult = resolveAggregation(question, matchedMetric);
+  const agg = aggResult.aggregation;
+  const direction = aggResult.sortDirection;
+
+  // 4. Time series intent
+  if (
+    (q.includes('trend') ||
+      q.includes('over time') ||
+      q.includes('monthly') ||
+      q.includes('yearly') ||
+      q.includes('daily') ||
+      q.includes('growth')) &&
+    dateCols.length > 0
+  ) {
     let gran: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly' = 'monthly';
     if (q.includes('day') || q.includes('daily')) gran = 'daily';
     if (q.includes('week')) gran = 'weekly';
@@ -151,7 +162,7 @@ export function parseIntentDeterministic(
       operation: 'time_series',
       metric: matchedMetric,
       group_by: [dateCols[0].name],
-      aggregation: 'sum',
+      aggregation: agg === 'mean' ? 'mean' : 'sum',
       time_granularity: gran,
       visualization: {
         type: 'line',
@@ -163,9 +174,35 @@ export function parseIntentDeterministic(
     };
   }
 
-  // 2. Correlation intent
-  if (q.includes('correlat') || q.includes('relationship') || q.includes('versus') || q.includes(' vs ') || q.includes('scatter')) {
-    const secMetric = numCols.find(c => c.name !== matchedMetric)?.name || numCols[1]?.name;
+  // 5. Correlation intent
+  if (
+    q.includes('correlat') ||
+    q.includes('relationship') ||
+    q.includes('versus') ||
+    q.includes(' vs ') ||
+    q.includes('scatter')
+  ) {
+    if (numCols.length < 2) {
+      return {
+        operation: 'clarification',
+        metric: matchedMetric,
+        user_intent_summary: 'Correlation analysis requires at least two numeric variables in the dataset.',
+      };
+    }
+    // Find secondary metric mentioned in question or fallback to other numeric column
+    let secMetric: string | undefined;
+    for (const c of numCols) {
+      if (c.name !== matchedMetric) {
+        const colRegex = new RegExp(`\\b${c.name.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&').toLowerCase()}\\b`, 'i');
+        if (colRegex.test(q)) {
+          secMetric = c.name;
+          break;
+        }
+      }
+    }
+    if (!secMetric) {
+      secMetric = numCols.find(c => c.name !== matchedMetric)?.name || numCols[1]?.name;
+    }
     return {
       operation: 'correlation',
       metric: matchedMetric,
@@ -180,8 +217,14 @@ export function parseIntentDeterministic(
     };
   }
 
-  // 3. Distribution / Histogram intent
-  if (q.includes('distribution') || q.includes('histogram') || q.includes('spread') || q.includes('variance') || q.includes('box plot')) {
+  // 6. Distribution / Histogram intent
+  if (
+    q.includes('distribution') ||
+    q.includes('histogram') ||
+    q.includes('spread') ||
+    q.includes('variance') ||
+    q.includes('box plot')
+  ) {
     return {
       operation: 'aggregate',
       metric: matchedMetric,
@@ -195,20 +238,25 @@ export function parseIntentDeterministic(
     };
   }
 
-  // 4. Group Aggregation / Breakdown
-  if (matchedGroup || q.includes('by') || q.includes('which') || q.includes('who') || q.includes('top') || q.includes('highest') || q.includes('lowest') || q.includes('most')) {
-    const groupCol = matchedGroup || catCols[0]?.name || profile.columns[0].name;
-    let agg: 'sum' | 'mean' | 'median' | 'count' | 'min' | 'max' = 'sum';
-    if (q.includes('average') || q.includes('avg') || q.includes('mean')) agg = 'mean';
-    else if (q.includes('median')) agg = 'median';
-    else if (q.includes('count') || q.includes('number of')) agg = 'count';
-    else if (q.includes('lowest') || q.includes('minimum') || q.includes('min') || q.includes('least')) agg = 'min';
-    else if (q.includes('highest') || q.includes('maximum') || q.includes('max') || q.includes('most')) agg = 'sum';
-
-    const direction: 'asc' | 'desc' = (q.includes('bottom') || q.includes('lowest') || q.includes('least')) ? 'asc' : 'desc';
+  // 7. Group Aggregation / Breakdown
+  if (
+    matchedGroup ||
+    q.includes('by ') ||
+    q.includes('which ') ||
+    q.includes('who ') ||
+    q.includes('top ') ||
+    q.includes('highest') ||
+    q.includes('lowest') ||
+    q.includes('most') ||
+    q.includes('least')
+  ) {
+    const groupCol = matchedGroup || catCols[0]?.name || profile.columns[0]?.name;
+    const isRanking = q.includes('top ') || q.includes('bottom ') || q.includes('rank') || q.includes('leader');
+    const topMatch = q.match(/\b(?:top|bottom|first|limit)\s+(\d+)\b/i);
+    const limit = topMatch ? parseInt(topMatch[1], 10) : (q.includes('top 5') || q.includes('first 5') ? 5 : 10);
 
     return {
-      operation: 'group_aggregate',
+      operation: isRanking ? 'ranking' : 'group_aggregate',
       group_by: [groupCol],
       metric: matchedMetric,
       aggregation: agg,
@@ -216,28 +264,32 @@ export function parseIntentDeterministic(
         column: matchedMetric || groupCol,
         direction,
       },
-      limit: 10,
+      limit,
       visualization: {
         type: 'bar',
         x: groupCol,
         y: matchedMetric,
-        title: `${agg.toUpperCase()} of ${matchedMetric || 'Count'} by ${groupCol}`,
+        title: isRanking
+          ? `Top ${limit} ${groupCol} by ${matchedMetric || 'Value'}`
+          : `${agg.toUpperCase()} of ${matchedMetric || 'Records'} by ${groupCol}`,
       },
-      user_intent_summary: `Aggregate ${matchedMetric} grouped by ${groupCol} (${agg}) sorted ${direction}ending.`,
+      user_intent_summary: isRanking
+        ? `Rank top ${limit} ${groupCol} by ${matchedMetric} (${agg}).`
+        : `Aggregate ${matchedMetric} grouped by ${groupCol} (${agg}) sorted ${direction}ending.`,
     };
   }
 
-  // Default aggregate
+  // 8. Single Metric Aggregate (e.g. "What is average order value?", "Show total revenue", "Show quantity")
   return {
     operation: 'aggregate',
     metric: matchedMetric,
-    aggregation: q.includes('average') || q.includes('mean') ? 'mean' : 'sum',
+    aggregation: agg,
     visualization: {
       type: 'histogram',
       x: matchedMetric,
-      title: `${matchedMetric || 'Values'} Summary`,
+      title: `${agg.toUpperCase()} of ${matchedMetric || 'Values'}`,
     },
-    user_intent_summary: `Calculate overall ${matchedMetric} summary.`,
+    user_intent_summary: `Calculate overall ${agg.toUpperCase()} of ${matchedMetric}.`,
   };
 }
 
@@ -269,8 +321,9 @@ CRITICAL RULES:
 1. YOU ARE NOT THE CALCULATOR. You do NOT compute or estimate answers.
 2. Select an allowed operation: "group_aggregate", "aggregate", "time_series", "correlation", "distribution".
 3. Map user language to exact dataset columns. If user says "sales", pick "Revenue" if that column exists.
-4. Support multi-turn context: If the user is following up on a previous query (e.g., "now only for North America", "what about by Product instead"), carry over the metric and operation while refining the filters or group_by dimension.
-5. Only return valid JSON matching this schema:
+4. Support multi-turn context: If the user is following up on a previous query (e.g., "now only for North America", "what about by Product instead", "only the top 5"), carry over the metric and operation while refining the filters or group_by dimension.
+5. If the user question is ambiguous or lacks a specific numeric metric (e.g. "What is the total?", "Show performance", "Show value") when multiple numeric columns exist, do NOT choose an arbitrary column.
+6. Only return valid JSON matching this schema:
 {
   "operation": "group_aggregate" | "aggregate" | "time_series" | "correlation" | "distribution",
   "metric": string (must match an existing numeric column name),
@@ -316,20 +369,18 @@ Generate the JSON execution plan. Return ONLY raw JSON without markdown code fen
     const text = response.text ? response.text.trim() : '';
     const parsed = JSON.parse(text);
 
-    // Validate that planned columns exist in dataset
-    const colNames = profile.columns.map(c => c.name.toLowerCase());
-    if (parsed.metric && !colNames.includes(parsed.metric.toLowerCase())) {
-      const match = profile.columns.find(c => c.name.toLowerCase().includes(parsed.metric.toLowerCase()));
-      if (match) parsed.metric = match.name;
-    }
-    if (parsed.group_by && Array.isArray(parsed.group_by)) {
-      parsed.group_by = parsed.group_by.map((g: string) => {
-        const match = profile.columns.find(c => c.name.toLowerCase() === g.toLowerCase() || c.name.toLowerCase().includes(g.toLowerCase()));
-        return match ? match.name : g;
-      });
+    // Validate and repair plan against schema
+    const validation = validateAndRepairPlan(parsed, profile, question);
+    if (!validation.valid) {
+      return validation.repairedPlan;
     }
 
-    return parsed as AnalysisPlan;
+    let finalPlan = validation.repairedPlan;
+    if (previousPlan) {
+      finalPlan = applyFollowUpContext(question, finalPlan, previousPlan, profile);
+    }
+
+    return finalPlan;
   } catch (err) {
     console.warn('Gemini planning failed or timed out; using deterministic planner fallback:', err);
     return parseIntentDeterministic(question, profile, previousPlan);

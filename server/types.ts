@@ -185,7 +185,8 @@ export type AllowedOperation =
   | 'comparison'
   | 'percentage_share'
   | 'outliers'
-  | 'missing_values';
+  | 'missing_values'
+  | 'clarification';
 
 export interface FilterCondition {
   column: string;

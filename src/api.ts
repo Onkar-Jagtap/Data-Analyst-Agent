@@ -223,7 +223,8 @@ export async function askDataQuery(
   if (res.ok && res.data && (res.data.success !== false || res.data.answer)) {
     return res.data;
   }
-  return clientEngine.askData(datasetId, question);
+  const lastPlan = conversationHistory && conversationHistory.length > 0 ? conversationHistory[0].plan : undefined;
+  return clientEngine.askData(datasetId, question, lastPlan);
 }
 
 export async function generateCustomChart(

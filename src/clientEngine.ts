@@ -14,6 +14,12 @@ import {
   getOutlierDrilldown,
   executeAnalysisPlan,
 } from '../server/analyzer.js';
+import {
+  resolveColumn,
+  resolveMetricFromQuery,
+  resolveAggregation,
+  applyFollowUpContext,
+} from '../server/query_resolver.js';
 import { performDataCleaning } from '../server/cleaner.js';
 import { performTransformation } from '../server/transformer.js';
 import { AnalysisPlan } from '../server/types.js';
@@ -713,7 +719,7 @@ class ClientAnalyticsEngine {
     };
   }
 
-  public askData(datasetId: string | undefined, question: string): AnalysisResult {
+  public askData(datasetId: string | undefined, question: string, previousPlan?: AnalysisPlan): AnalysisResult {
     const ds = this.getDataset(datasetId);
     if (!ds) throw new Error('Dataset not found in client storage.');
 
@@ -723,24 +729,55 @@ class ClientAnalyticsEngine {
     const catCols = cols.filter(c => c.type === 'categorical');
     const dateCols = cols.filter(c => c.type === 'datetime');
 
-    // 1. Identify Target Metric
-    let metricCol = numCols.find(c => q.includes(c.name.toLowerCase()));
-    if (!metricCol) {
-      if (q.includes('profit') || q.includes('margin')) {
-        metricCol = numCols.find(c => c.name.toLowerCase().includes('profit')) || numCols[0];
-      } else if (q.includes('revenue') || q.includes('sale') || q.includes('amount') || q.includes('money')) {
-        metricCol = numCols.find(c => c.name.toLowerCase().includes('revenue') || c.name.toLowerCase().includes('sale')) || numCols[0];
-      } else if (q.includes('cost') || q.includes('spend')) {
-        metricCol = numCols.find(c => c.name.toLowerCase().includes('cost')) || numCols[0];
-      } else if (q.includes('quantity') || q.includes('volume') || q.includes('count')) {
-        metricCol = numCols.find(c => c.name.toLowerCase().includes('quantity')) || numCols[0];
-      } else {
-        metricCol = numCols[0];
-      }
+    // Safe resolution using deterministic hierarchy
+    const metricRes = resolveMetricFromQuery(question, cols, previousPlan);
+    if (metricRes.status === 'ambiguous' || (metricRes.status === 'unknown' && numCols.length > 1)) {
+      const msg = metricRes.clarificationMessage ||
+        `Which metric would you like to analyze? Available numeric metrics: ${numCols.map(c => c.name).join(', ')}.`;
+      return {
+        success: false,
+        question,
+        plan: {
+          operation: 'clarification',
+          user_intent_summary: msg,
+        },
+        answer: msg,
+        keyMetrics: [],
+        businessInterpretation: [
+          'The query does not specify which numeric metric to evaluate.',
+          'Please choose one of the available numeric metrics listed below.',
+        ],
+        dataHandling: {
+          totalRows: ds.profile.rowCount,
+          validRowsAnalyzed: 0,
+          excludedRows: ds.profile.rowCount,
+          missingValuesExcluded: 0,
+          invalidValuesExcluded: 0,
+          filteredOutRows: 0,
+          methodDescription: 'Analysis stopped: clarification required to prevent guessing metric.',
+          rulesApplied: ['Deterministic Metric Clarification Protocol'],
+          warnings: ['Metric ambiguous or not found.'],
+          confidenceScore: 0,
+          isDeterministic: true,
+        },
+        error: {
+          code: 'CLARIFICATION_REQUIRED',
+          message: msg,
+          suggestion: `Select one of: ${numCols.map(c => c.name).join(', ')}.`,
+        },
+      };
     }
 
-    // 2. Identify Dimension
-    let dimCol = catCols.find(c => q.includes(c.name.toLowerCase()));
+    const metricCol = metricRes.column || numCols[0];
+
+    // Identify Dimension
+    let dimCol: any = null;
+    for (const c of [...catCols, ...dateCols]) {
+      if (q.includes(c.name.toLowerCase())) {
+        dimCol = c;
+        break;
+      }
+    }
     if (!dimCol && (q.includes('region') || q.includes('area') || q.includes('location'))) {
       dimCol = catCols.find(c => c.name.toLowerCase().includes('region') || c.name.toLowerCase().includes('country'));
     }
@@ -757,7 +794,7 @@ class ClientAnalyticsEngine {
       dimCol = catCols[0];
     }
 
-    // 3. Determine Operation and Chart Type
+    // Determine Operation and Chart Type
     let operation: any = 'group_aggregate';
     let chartType: 'bar' | 'line' | 'scatter' | 'histogram' | 'box' | 'pie' = 'bar';
 
@@ -775,9 +812,10 @@ class ClientAnalyticsEngine {
       chartType = 'bar';
     }
 
-    const aggregation = q.includes('average') || q.includes('avg') || q.includes('mean') ? 'mean' : 'sum';
+    const aggResolution = resolveAggregation(question, metricCol?.name);
+    const aggregation = aggResolution.aggregation;
 
-    const plan: AnalysisPlan = {
+    let plan: AnalysisPlan = {
       operation,
       metric: metricCol?.name || cols[0].name,
       group_by: dimCol ? [dimCol.name] : [],
@@ -790,7 +828,25 @@ class ClientAnalyticsEngine {
       },
     };
 
+    if (previousPlan) {
+      plan = applyFollowUpContext(question, plan, previousPlan, ds.profile);
+    }
+
     const execution = executeAnalysisPlan(ds.rawRows, ds.profile, plan);
+
+    if (!execution.success) {
+      return {
+        success: false,
+        question,
+        plan,
+        answer: execution.error?.message || 'Analysis could not be computed.',
+        keyMetrics: [],
+        businessInterpretation: execution.error?.suggestion ? [execution.error.suggestion] : [],
+        dataHandling: execution.dataHandling,
+        error: execution.error,
+        warnings: execution.warnings,
+      };
+    }
 
     // Build Plotly figure
     let chart: any = null;

@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   Code2,
+  HelpCircle,
   History,
   Info,
   LineChart,
@@ -180,68 +181,177 @@ export const AskDataView: React.FC<AskDataViewProps> = ({
       )}
 
       {/* Active Result Presentation */}
-      {activeResult && !loading && (
-        <div className="p-6 rounded-2xl bg-slate-900/70 border border-slate-800 shadow-xl space-y-5">
-          {/* Question, Status and Code Export button */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
-            <div>
-              <span className="text-[10px] uppercase font-mono text-slate-500">Query Evaluated</span>
-              <h2 className="text-base font-bold text-slate-100 mt-0.5">
-                "{activeResult.question}"
-              </h2>
+      {activeResult && !loading && (() => {
+        const isClarification =
+          activeResult.error?.code === 'CLARIFICATION_REQUIRED' ||
+          activeResult.error?.code === 'AMBIGUOUS_METRIC' ||
+          activeResult.plan?.operation === 'clarification';
+        const isError = !activeResult.success && !isClarification;
+        const numCols = profile.columns.filter(c => c.type === 'numeric');
+
+        return (
+          <div className="p-6 rounded-2xl bg-slate-900/70 border border-slate-800 shadow-xl space-y-5">
+            {/* Question, Status and Code Export button */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+              <div>
+                <span className="text-[10px] uppercase font-mono text-slate-500">Query Evaluated</span>
+                <h2 className="text-base font-bold text-slate-100 mt-0.5">
+                  "{activeResult.question}"
+                </h2>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {activeResult.success ? (
+                  <>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/40 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>Deterministic Math Verified</span>
+                    </span>
+                    <span className="hidden sm:flex text-[10px] font-mono px-2 py-0.5 rounded bg-sky-950/60 text-sky-400 border border-sky-800/40 items-center gap-1" title="Dataset records never leave the local container to an external LLM">
+                      <ShieldCheck className="w-3 h-3" />
+                      <span>Zero Raw Rows to LLM</span>
+                    </span>
+                  </>
+                ) : isClarification ? (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/60 text-amber-400 border border-amber-800/40 flex items-center gap-1">
+                    <HelpCircle className="w-3 h-3" />
+                    <span>Clarification Needed</span>
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 text-rose-400 border border-rose-800/40 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    <span>Analysis Halted (Safe Failure)</span>
+                  </span>
+                )}
+
+                {activeResult.chart && onPinChart && (
+                  <button
+                    onClick={() => onPinChart(activeResult.chart, activeResult.question)}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-xs font-medium text-blue-300 transition-colors shadow-sm"
+                    title="Pin this visualization to BI Dashboard"
+                  >
+                    <Pin className="w-3.5 h-3.5" />
+                    <span>Pin to Dashboard</span>
+                  </button>
+                )}
+
+                {activeResult.success && (
+                  <button
+                    onClick={handleOpenCodeModal}
+                    disabled={codeLoading}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-200 transition-colors shadow-sm"
+                  >
+                    <Code2 className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Export Code</span>
+                  </button>
+                )}
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/40 flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3" />
-                <span>Deterministic Math Verified</span>
-              </span>
-
-              {activeResult.chart && onPinChart && (
-                <button
-                  onClick={() => onPinChart(activeResult.chart, activeResult.question)}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-xs font-medium text-blue-300 transition-colors shadow-sm"
-                  title="Pin this visualization to BI Dashboard"
-                >
-                  <Pin className="w-3.5 h-3.5" />
-                  <span>Pin to Dashboard</span>
-                </button>
-              )}
-
-              <button
-                onClick={handleOpenCodeModal}
-                disabled={codeLoading}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-200 transition-colors shadow-sm"
-              >
-                <Code2 className="w-3.5 h-3.5 text-blue-400" />
-                <span>Export Code</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Executive Answer Callout */}
-          <div className="p-4 rounded-xl bg-blue-950/20 border border-blue-800/40 text-slate-100 text-sm sm:text-base font-semibold leading-relaxed">
-            {activeResult.answer}
-          </div>
-
-          {/* Key Metrics Callout Cards */}
-          {activeResult.keyMetrics && activeResult.keyMetrics.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              {activeResult.keyMetrics.map((km, idx) => (
-                <div key={idx} className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
-                  <div className="text-[11px] text-slate-400 truncate">{km.label}</div>
-                  <div className="text-lg font-bold font-mono text-slate-100 mt-0.5 truncate">
-                    {km.value}
+            {/* Methodology & Metric Selection Transparency Banner (Priority 9) */}
+            {activeResult.success && activeResult.plan && (
+              <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] font-mono">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-500">Metric:</span>
+                  <span className="text-blue-300 font-semibold px-1.5 py-0.5 bg-blue-950/50 rounded border border-blue-800/40">
+                    {activeResult.plan.metric || 'None'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-500">Aggregation:</span>
+                  <span className="text-slate-300 font-semibold uppercase">
+                    {activeResult.plan.aggregation || 'sum'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-500">Breakdown:</span>
+                  <span className="text-slate-300">
+                    {activeResult.plan.group_by && activeResult.plan.group_by.length > 0
+                      ? activeResult.plan.group_by.join(', ')
+                      : 'Entire Dataset'}
+                  </span>
+                </div>
+                {activeResult.plan.filters && activeResult.plan.filters.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-500">Filter:</span>
+                    <span className="text-purple-300">
+                      {activeResult.plan.filters.map(f => `${f.column} ${f.operator} ${f.value}`).join(' & ')}
+                    </span>
                   </div>
-                  {km.context && (
-                    <div className="text-[10px] text-slate-500 font-mono truncate mt-0.5">
-                      {km.context}
+                )}
+                {activeResult.dataHandling && (
+                  <div className="flex items-center gap-1.5 ml-auto text-slate-400">
+                    <span>{activeResult.dataHandling.validRowsAnalyzed.toLocaleString()} rows analyzed</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Executive Answer Callout / Clarification / Safe Failure Box */}
+            <div
+              className={`p-4 rounded-xl border text-sm sm:text-base leading-relaxed ${
+                isClarification
+                  ? 'bg-amber-950/20 border-amber-800/40 text-amber-200'
+                  : isError
+                  ? 'bg-rose-950/20 border-rose-800/40 text-rose-200'
+                  : 'bg-blue-950/20 border-blue-800/40 text-slate-100 font-semibold'
+              }`}
+            >
+              <div className="flex items-start gap-2.5">
+                {isClarification && <HelpCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />}
+                {isError && <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />}
+                <div className="space-y-2 flex-1">
+                  <p className="font-semibold">{activeResult.answer}</p>
+
+                  {/* Suggestion Chips for Clarification */}
+                  {isClarification && numCols.length > 0 && (
+                    <div className="pt-2 border-t border-amber-800/30">
+                      <span className="text-xs text-amber-300 font-medium block mb-1.5">
+                        Select a metric to calculate:
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {numCols.map((c, i) => (
+                          <button
+                            key={i}
+                            onClick={() => onAskQuestion(`${activeResult.question} for ${c.name}`)}
+                            className="px-2.5 py-1 rounded-lg bg-amber-900/40 hover:bg-amber-800/50 border border-amber-700/50 text-xs text-amber-100 font-medium transition-colors"
+                          >
+                            {c.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Error Reason & Suggestion */}
+                  {isError && (activeResult.error?.reason || activeResult.error?.suggestion) && (
+                    <div className="text-xs text-rose-300/90 pt-1 space-y-1">
+                      {activeResult.error?.reason && <p>• Reason: {activeResult.error.reason}</p>}
+                      {activeResult.error?.suggestion && <p>• Suggestion: {activeResult.error.suggestion}</p>}
                     </div>
                   )}
                 </div>
-              ))}
+              </div>
             </div>
-          )}
+
+            {/* Key Metrics Callout Cards */}
+            {activeResult.keyMetrics && activeResult.keyMetrics.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                {activeResult.keyMetrics.map((km, idx) => (
+                  <div key={idx} className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                    <div className="text-[11px] text-slate-400 truncate">{km.label}</div>
+                    <div className="text-lg font-bold font-mono text-slate-100 mt-0.5 truncate">
+                      {km.value}
+                    </div>
+                    {km.context && (
+                      <div className="text-[10px] text-slate-500 font-mono truncate mt-0.5">
+                        {km.context}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
           {/* Interactive Plotly Chart */}
           {activeResult.chart && (
@@ -297,7 +407,8 @@ export const AskDataView: React.FC<AskDataViewProps> = ({
             )}
           </div>
         </div>
-      )}
+      );
+    })()}
 
       {/* Query History */}
       {history.length > 1 && (
