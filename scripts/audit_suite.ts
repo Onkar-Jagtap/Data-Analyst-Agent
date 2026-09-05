@@ -15,6 +15,12 @@ import {
   applyFollowUpContext,
 } from '../server/query_resolver.js';
 import { parseIntentDeterministic } from '../server/ai_agent.js';
+import {
+  detectDatasetDomain,
+  validateSuggestedQuestion,
+  generateSchemaGroundedSuggestions,
+  generateSuggestionsForDataset,
+} from '../server/suggestion_generator.js';
 
 interface TestResult {
   suite: string;
@@ -755,6 +761,560 @@ async function runAudit() {
     for (const item of res.data.items) {
       if (typeof item.value !== 'number' || isNaN(item.value) || !isFinite(item.value)) {
         throw new Error(`Invalid non-finite number calculated for ${item.category}: ${item.value}`);
+      }
+    }
+  });
+
+  // ============================================================================
+  // AUDIT: AI-GENERATED SUGGESTED QUESTIONS (REGRESSION & VALIDATION SUITE)
+  // ============================================================================
+  console.log('\n[Suggested Questions Audit] Testing dataset-grounded suggestions, domain inference, validation layer, and regression cases');
+
+  // Synthetic Test Dataset Profiles
+  const votingProfile: any = {
+    id: 'voting-dataset-test',
+    filename: 'election_sentiment_2024.csv',
+    rowCount: 2400,
+    columnCount: 6,
+    columns: [
+      {
+        name: 'State',
+        type: 'categorical',
+        totalCount: 2400,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 50,
+        uniquePercentage: 2.08,
+        sampleValues: ['California', 'Texas', 'Florida', 'Pennsylvania'],
+        isIdentifier: false,
+        topCategories: [
+          { category: 'California', count: 200, percentage: 8.3 },
+          { category: 'Texas', count: 180, percentage: 7.5 },
+        ],
+      },
+      {
+        name: 'Candidate',
+        type: 'categorical',
+        totalCount: 2400,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 4,
+        uniquePercentage: 0.16,
+        sampleValues: ['Candidate A', 'Candidate B', 'Candidate C'],
+        isIdentifier: false,
+      },
+      {
+        name: 'Sentiment',
+        type: 'categorical',
+        totalCount: 2400,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 3,
+        uniquePercentage: 0.12,
+        sampleValues: ['Positive', 'Negative', 'Neutral'],
+        isIdentifier: false,
+        topCategories: [
+          { category: 'Positive', count: 1100, percentage: 45.8 },
+          { category: 'Negative', count: 800, percentage: 33.3 },
+          { category: 'Neutral', count: 500, percentage: 20.8 },
+        ],
+      },
+      {
+        name: 'Sentiment Score',
+        type: 'numeric',
+        totalCount: 2400,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 180,
+        uniquePercentage: 7.5,
+        sampleValues: [0.75, -0.42, 0.12, 0.88],
+        isIdentifier: false,
+        min: -1,
+        max: 1,
+        mean: 0.22,
+      },
+      {
+        name: 'Date',
+        type: 'datetime',
+        totalCount: 2400,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 90,
+        uniquePercentage: 3.75,
+        sampleValues: ['2024-01-15', '2024-02-20'],
+        isIdentifier: false,
+      },
+      {
+        name: 'Response Count',
+        type: 'numeric',
+        totalCount: 2400,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 400,
+        uniquePercentage: 16.6,
+        sampleValues: [150, 420, 85],
+        isIdentifier: false,
+        min: 10,
+        max: 1000,
+        mean: 260,
+      },
+    ],
+  };
+
+  const hrProfile: any = {
+    id: 'hr-workforce-test',
+    filename: 'workforce_attrition.csv',
+    rowCount: 1200,
+    columnCount: 4,
+    columns: [
+      {
+        name: 'Department',
+        type: 'categorical',
+        totalCount: 1200,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 8,
+        uniquePercentage: 0.6,
+        sampleValues: ['Engineering', 'Sales', 'Marketing', 'Product'],
+        isIdentifier: false,
+      },
+      {
+        name: 'Salary',
+        type: 'numeric',
+        totalCount: 1200,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 850,
+        uniquePercentage: 70.8,
+        sampleValues: [85000, 120000, 95000],
+        isIdentifier: false,
+        min: 45000,
+        max: 220000,
+        mean: 105000,
+      },
+      {
+        name: 'Attrition',
+        type: 'categorical',
+        totalCount: 1200,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 2,
+        uniquePercentage: 0.16,
+        sampleValues: ['Yes', 'No'],
+        isIdentifier: false,
+      },
+      {
+        name: 'Tenure',
+        type: 'numeric',
+        totalCount: 1200,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 15,
+        uniquePercentage: 1.25,
+        sampleValues: [2.5, 5, 1, 8.2],
+        isIdentifier: false,
+        min: 0.5,
+        max: 20,
+        mean: 4.8,
+      },
+    ],
+  };
+
+  const minimalProfile: any = {
+    id: 'minimal-test',
+    filename: 'simple_counts.csv',
+    rowCount: 50,
+    columnCount: 2,
+    columns: [
+      {
+        name: 'Category',
+        type: 'categorical',
+        totalCount: 50,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 5,
+        uniquePercentage: 10,
+        sampleValues: ['Alpha', 'Beta', 'Gamma'],
+        isIdentifier: false,
+      },
+      {
+        name: 'Value',
+        type: 'numeric',
+        totalCount: 50,
+        nullCount: 0,
+        nullPercentage: 0,
+        uniqueCount: 45,
+        uniquePercentage: 90,
+        sampleValues: [10, 25, 40],
+        isIdentifier: false,
+        min: 5,
+        max: 100,
+        mean: 52,
+      },
+    ],
+  };
+
+  recordTest('Suggestions - Voting Sentiment Regression', 'Must NOT generate Revenue/Profit/Sales/Product and MUST ground in State/Candidate/Sentiment', () => {
+    const mapping = detectDatasetDomain(votingProfile);
+    if (mapping.domain !== 'sentiment') {
+      throw new Error(`Expected sentiment domain for voting sentiment dataset, got: ${mapping.domain}`);
+    }
+
+    const suggestions = generateSchemaGroundedSuggestions(votingProfile, { count: 5 });
+    if (suggestions.length === 0) {
+      throw new Error('Suggestions engine returned 0 suggestions');
+    }
+
+    for (const q of suggestions) {
+      const qLower = q.toLowerCase();
+
+      // Regression checks: MUST NOT contain business terms ungrounded in dataset
+      if (/\brevenue\b/i.test(qLower)) throw new Error(`Ungrounded 'revenue' found in voting question: "${q}"`);
+      if (/\bprofit\b/i.test(qLower)) throw new Error(`Ungrounded 'profit' found in voting question: "${q}"`);
+      if (/\bmargin\b/i.test(qLower)) throw new Error(`Ungrounded 'margin' found in voting question: "${q}"`);
+      if (/\bsales\b/i.test(qLower)) throw new Error(`Ungrounded 'sales' found in voting question: "${q}"`);
+      if (/\bproduct\b/i.test(qLower)) throw new Error(`Ungrounded 'product' found in voting question: "${q}"`);
+      if (/\bcustomer\b/i.test(qLower)) throw new Error(`Ungrounded 'customer' found in voting question: "${q}"`);
+
+      // Must pass validation layer
+      const val = validateSuggestedQuestion(q, votingProfile);
+      if (!val.valid) {
+        throw new Error(`Question "${q}" failed validation layer: ${val.reason}`);
+      }
+    }
+
+    // Must reference actual columns
+    const allText = suggestions.join(' ').toLowerCase();
+    const referencesActualColumns =
+      allText.includes('state') ||
+      allText.includes('candidate') ||
+      allText.includes('sentiment') ||
+      allText.includes('sentiment score') ||
+      allText.includes('response count');
+
+    if (!referencesActualColumns) {
+      throw new Error('Suggestions did not reference any actual columns from voting dataset');
+    }
+  });
+
+  recordTest('Suggestions - E-commerce Sales Dataset', 'Revenue and Profit questions are valid and correctly generated', () => {
+    const mapping = detectDatasetDomain(sampleProfile);
+    if (mapping.domain !== 'ecommerce_sales') {
+      throw new Error(`Expected ecommerce_sales domain for B2B dataset, got: ${mapping.domain}`);
+    }
+
+    const suggestions = generateSchemaGroundedSuggestions(sampleProfile, { count: 5 });
+    if (suggestions.length === 0) throw new Error('Returned 0 suggestions');
+
+    for (const q of suggestions) {
+      const val = validateSuggestedQuestion(q, sampleProfile);
+      if (!val.valid) {
+        throw new Error(`Question "${q}" failed validation layer for sampleProfile: ${val.reason}`);
+      }
+    }
+  });
+
+  recordTest('Suggestions - HR Workforce Dataset', 'Revenue questions must NOT appear; Salary/Department/Attrition used', () => {
+    const mapping = detectDatasetDomain(hrProfile);
+    if (mapping.domain !== 'hr_workforce') {
+      throw new Error(`Expected hr_workforce domain, got: ${mapping.domain}`);
+    }
+
+    const suggestions = generateSchemaGroundedSuggestions(hrProfile, { count: 5 });
+    for (const q of suggestions) {
+      const qLower = q.toLowerCase();
+      if (/\brevenue\b/i.test(qLower)) throw new Error(`Ungrounded 'revenue' found in HR question: "${q}"`);
+      if (/\bprofit\b/i.test(qLower)) throw new Error(`Ungrounded 'profit' found in HR question: "${q}"`);
+      if (/\bsales\b/i.test(qLower)) throw new Error(`Ungrounded 'sales' found in HR question: "${q}"`);
+      if (/\bproduct\b/i.test(qLower)) throw new Error(`Ungrounded 'product' found in HR question: "${q}"`);
+
+      const val = validateSuggestedQuestion(q, hrProfile);
+      if (!val.valid) throw new Error(`Question "${q}" failed validation: ${val.reason}`);
+    }
+  });
+
+  recordTest('Suggestions - Minimal Boundary Dataset (Category, Value)', 'Only references Category and Value; no hallucinated concepts', () => {
+    const suggestions = generateSchemaGroundedSuggestions(minimalProfile, { count: 5 });
+    if (suggestions.length === 0) throw new Error('Returned 0 suggestions for minimal dataset');
+
+    for (const q of suggestions) {
+      const qLower = q.toLowerCase();
+      if (/\brevenue\b/i.test(qLower)) throw new Error(`Ungrounded 'revenue' in minimal question: "${q}"`);
+      if (/\bprofit\b/i.test(qLower)) throw new Error(`Ungrounded 'profit' in minimal question: "${q}"`);
+      if (/\bdepartment\b/i.test(qLower)) throw new Error(`Ungrounded 'department' in minimal question: "${q}"`);
+      if (/\bcandidate\b/i.test(qLower)) throw new Error(`Ungrounded 'candidate' in minimal question: "${q}"`);
+
+      const val = validateSuggestedQuestion(q, minimalProfile);
+      if (!val.valid) throw new Error(`Question "${q}" failed validation: ${val.reason}`);
+    }
+  });
+
+  recordTest('Suggestions - Contextual Follow-Up Suggestions', 'Follow-up suggestions adapt to previous analysis and remain grounded', () => {
+    const lastResult: any = {
+      plan: {
+        metric: 'Sentiment Score',
+        group_by: ['State'],
+        operation: 'group_aggregate',
+      },
+    };
+
+    const followUps = generateSchemaGroundedSuggestions(votingProfile, {
+      lastResult,
+      count: 4,
+    });
+
+    if (followUps.length === 0) throw new Error('No follow-up suggestions generated');
+
+    for (const q of followUps) {
+      const val = validateSuggestedQuestion(q, votingProfile);
+      if (!val.valid) throw new Error(`Follow-up "${q}" failed validation: ${val.reason}`);
+      if (/\brevenue\b/i.test(q)) throw new Error(`Ungrounded 'revenue' in follow-up: "${q}"`);
+    }
+
+    const followUpText = followUps.join(' ');
+    // Should suggest analyzing across Candidate or over time or opposite ranking
+    const hasContextualPivot =
+      followUpText.includes('Candidate') ||
+      followUpText.includes('time') ||
+      followUpText.includes('lowest') ||
+      followUpText.includes('distribution');
+
+    if (!hasContextualPivot) {
+      throw new Error(`Follow-ups did not contain contextual pivot: ${followUpText}`);
+    }
+  });
+
+  recordTest('Suggestions - Strict Validation Layer Rejection', 'Rejects ungrounded business concepts and unsupported operations', () => {
+    // 1. Revenue on voting dataset
+    const r1 = validateSuggestedQuestion('Which state generates the highest revenue?', votingProfile);
+    if (r1.valid) throw new Error('Expected validation failure for revenue on voting dataset');
+
+    // 2. Profit on HR dataset
+    const r2 = validateSuggestedQuestion('What is the profit by department?', hrProfile);
+    if (r2.valid) throw new Error('Expected validation failure for profit on HR dataset');
+
+    // 3. Time series question when no date column exists
+    const r3 = validateSuggestedQuestion('Show monthly trend over time', minimalProfile);
+    if (r3.valid) throw new Error('Expected validation failure for time trend on dataset with no date column');
+
+    // 4. Correlation question when only 1 numeric column exists
+    const r4 = validateSuggestedQuestion('Analyze correlation between Value and Price', minimalProfile);
+    if (r4.valid) throw new Error('Expected validation failure for correlation on dataset with 1 numeric column');
+  });
+
+  await recordTest('API - Suggestions Endpoints (GET & POST)', 'Returns validated suggestions via live HTTP API', async () => {
+    const sampleId = 'sample-b2b-sales-sion';
+    // GET
+    const resGet = await fetch(`http://localhost:3000/api/suggestions/${sampleId}`);
+    const jsonGet = await resGet.json();
+    if (!jsonGet.success || !Array.isArray(jsonGet.data) || jsonGet.data.length === 0) {
+      throw new Error('GET /api/suggestions/:id failed: ' + JSON.stringify(jsonGet));
+    }
+
+    // POST with context
+    const resPost = await fetch(`http://localhost:3000/api/suggestions/${sampleId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lastQuestion: 'What is total revenue by region?',
+        count: 4,
+      }),
+    });
+    const jsonPost = await resPost.json();
+    if (!jsonPost.success || !Array.isArray(jsonPost.data) || jsonPost.data.length !== 4) {
+      throw new Error('POST /api/suggestions/:id failed: ' + JSON.stringify(jsonPost));
+    }
+  });
+
+  // ============================================================================
+  // DATASET 7: Healthcare & Clinical Trial (Age, Blood_Pressure, Treatment, Dosage, Date, Boolean)
+  // ============================================================================
+  console.log('\n[Dataset 7] Healthcare & Clinical Trial: Multi-type clinical records');
+  const clinicalRows = [
+    { Patient_ID: 'P001', Age: 45, Treatment_Group: 'Drug_A', Blood_Pressure: 130, Dosage_mg: 50, Improved: 'Yes', Trial_Date: '2024-01-10' },
+    { Patient_ID: 'P002', Age: 52, Treatment_Group: 'Drug_B', Blood_Pressure: 142, Dosage_mg: 100, Improved: 'Yes', Trial_Date: '2024-01-12' },
+    { Patient_ID: 'P003', Age: 39, Treatment_Group: 'Placebo', Blood_Pressure: 138, Dosage_mg: 0, Improved: 'No', Trial_Date: '2024-01-15' },
+    { Patient_ID: 'P004', Age: 61, Treatment_Group: 'Drug_A', Blood_Pressure: 128, Dosage_mg: 50, Improved: 'Yes', Trial_Date: '2024-01-18' },
+    { Patient_ID: 'P005', Age: 48, Treatment_Group: 'Drug_B', Blood_Pressure: 135, Dosage_mg: 100, Improved: 'Yes', Trial_Date: '2024-01-20' },
+    { Patient_ID: 'P006', Age: 34, Treatment_Group: 'Placebo', Blood_Pressure: 145, Dosage_mg: 0, Improved: 'No', Trial_Date: '2024-01-22' },
+    { Patient_ID: 'P007', Age: 58, Treatment_Group: 'Drug_A', Blood_Pressure: 126, Dosage_mg: 75, Improved: 'Yes', Trial_Date: '2024-01-25' },
+    { Patient_ID: 'P008', Age: 67, Treatment_Group: 'Drug_B', Blood_Pressure: 139, Dosage_mg: 100, Improved: 'Yes', Trial_Date: '2024-01-28' },
+    { Patient_ID: 'P009', Age: 42, Treatment_Group: 'Placebo', Blood_Pressure: 148, Dosage_mg: 0, Improved: 'No', Trial_Date: '2024-01-30' },
+    { Patient_ID: 'P010', Age: 55, Treatment_Group: 'Drug_A', Blood_Pressure: 122, Dosage_mg: 75, Improved: 'Yes', Trial_Date: '2024-02-02' },
+    { Patient_ID: 'P011', Age: 49, Treatment_Group: 'Drug_B', Blood_Pressure: 132, Dosage_mg: 100, Improved: 'Yes', Trial_Date: '2024-02-05' },
+    { Patient_ID: 'P012', Age: 63, Treatment_Group: 'Placebo', Blood_Pressure: 152, Dosage_mg: 0, Improved: 'No', Trial_Date: '2024-02-08' },
+  ];
+  const clinicalProfile = profileDataset(clinicalRows, 'clinical_trial_results.csv', 'ds-clinical-001');
+
+  recordTest('Dataset 7 - Clinical Profiler & Types', 'Correctly profiles numeric, categorical, date, and text columns', () => {
+    const ageCol = clinicalProfile.columns.find(c => c.name === 'Age');
+    const bpCol = clinicalProfile.columns.find(c => c.name === 'Blood_Pressure');
+    const treatCol = clinicalProfile.columns.find(c => c.name === 'Treatment_Group');
+    const dateCol = clinicalProfile.columns.find(c => c.name === 'Trial_Date');
+
+    if (!ageCol || ageCol.type !== 'numeric') throw new Error('Age column not detected as numeric');
+    if (!bpCol || bpCol.type !== 'numeric') throw new Error('Blood_Pressure column not detected as numeric');
+    if (!treatCol || treatCol.type !== 'categorical') throw new Error('Treatment_Group column not detected as categorical');
+    if (!dateCol || dateCol.type !== 'datetime') throw new Error('Trial_Date column not detected as datetime');
+  });
+
+  recordTest('Dataset 7 - Pearson Correlation Matrix', 'Computes valid, symmetric correlation matrix with 0 NaNs', () => {
+    const corr = calculateCorrelationMatrix(clinicalRows, clinicalProfile);
+    if (corr.columns.length < 3) throw new Error('Expected at least 3 numeric columns in clinical correlation matrix');
+    if (corr.matrix.length !== corr.columns.length) throw new Error('Correlation matrix dimension mismatch');
+
+    // Mathematical checks: symmetry, diagonal = 1.0, values in [-1, 1]
+    for (let i = 0; i < corr.matrix.length; i++) {
+      if (corr.matrix[i][i] !== 1.0) throw new Error(`Diagonal element at [${i}][${i}] must be 1.0, got ${corr.matrix[i][i]}`);
+      for (let j = 0; j < corr.matrix[i].length; j++) {
+        const val = corr.matrix[i][j];
+        if (isNaN(val)) throw new Error(`NaN found in correlation matrix at [${i}][${j}]`);
+        if (val < -1.0 || val > 1.0) throw new Error(`Correlation value ${val} outside [-1.0, 1.0]`);
+        if (Math.abs(corr.matrix[i][j] - corr.matrix[j][i]) > 0.0001) {
+          throw new Error(`Asymmetric correlation: M[${i}][${j}]=${corr.matrix[i][j]} vs M[${j}][${i}]=${corr.matrix[j][i]}`);
+        }
+      }
+    }
+  });
+
+  recordTest('Dataset 7 - AI Suggestions Field Reading & Grounding', 'Dynamically reads clinical fields without hallucinating business concepts', () => {
+    const suggestions = generateSchemaGroundedSuggestions(clinicalProfile, { count: 5 });
+    if (suggestions.length === 0) throw new Error('Returned 0 suggestions');
+
+    for (const q of suggestions) {
+      const qLower = q.toLowerCase();
+      // Zero ungrounded business concepts
+      if (/\brevenue\b/i.test(qLower)) throw new Error(`Ungrounded 'revenue' in clinical question: "${q}"`);
+      if (/\bprofit\b/i.test(qLower)) throw new Error(`Ungrounded 'profit' in clinical question: "${q}"`);
+      if (/\bsales\b/i.test(qLower)) throw new Error(`Ungrounded 'sales' in clinical question: "${q}"`);
+      if (/\bproduct\b/i.test(qLower)) throw new Error(`Ungrounded 'product' in clinical question: "${q}"`);
+
+      // Validation layer confirmation
+      const val = validateSuggestedQuestion(q, clinicalProfile);
+      if (!val.valid) throw new Error(`Question "${q}" failed validation: ${val.reason}`);
+    }
+
+    // Must reference actual clinical columns
+    const allText = suggestions.join(' ');
+    const readsActualFields =
+      allText.includes('Age') ||
+      allText.includes('Blood_Pressure') ||
+      allText.includes('Treatment_Group') ||
+      allText.includes('Dosage_mg') ||
+      allText.includes('Trial_Date');
+
+    if (!readsActualFields) {
+      throw new Error('Suggestions failed to read and use actual clinical fields from schema');
+    }
+  });
+
+  // ============================================================================
+  // DATASET 8: Academic / Education Dataset (GPA, Percentage strings, Booleans)
+  // ============================================================================
+  console.log('\n[Dataset 8] Academic Performance: GPA, attendance percentages, and degrees');
+  const studentRows = [
+    { Student_ID: 'S101', Major: 'Computer Science', GPA: 3.85, Attendance_Rate: '96.5%', Scholarship: true, Graduation_Year: 2025 },
+    { Student_ID: 'S102', Major: 'Mechanical Eng', GPA: 3.42, Attendance_Rate: '88.0%', Scholarship: false, Graduation_Year: 2024 },
+    { Student_ID: 'S103', Major: 'Computer Science', GPA: 3.91, Attendance_Rate: '98.2%', Scholarship: true, Graduation_Year: 2025 },
+    { Student_ID: 'S104', Major: 'Biology', GPA: 3.15, Attendance_Rate: '82.4%', Scholarship: false, Graduation_Year: 2026 },
+    { Student_ID: 'S105', Major: 'Economics', GPA: 3.60, Attendance_Rate: '91.0%', Scholarship: true, Graduation_Year: 2024 },
+    { Student_ID: 'S106', Major: 'Economics', GPA: 2.89, Attendance_Rate: '75.5%', Scholarship: false, Graduation_Year: 2025 },
+    { Student_ID: 'S107', Major: 'Mechanical Eng', GPA: 3.75, Attendance_Rate: '94.0%', Scholarship: true, Graduation_Year: 2024 },
+    { Student_ID: 'S108', Major: 'Biology', GPA: 3.55, Attendance_Rate: '89.5%', Scholarship: false, Graduation_Year: 2026 },
+  ];
+  const studentProfile = profileDataset(studentRows, 'student_records.csv', 'ds-student-001');
+
+  recordTest('Dataset 8 - Percentage String Number Cleaner', 'Parses percentages like "96.5%" into numeric floats', () => {
+    const parsed = parseCleanNumber('96.5%');
+    if (!parsed.isNum || parsed.value !== 96.5) {
+      throw new Error(`Failed to parse percentage "96.5%", got: ${JSON.stringify(parsed)}`);
+    }
+    const attCol = studentProfile.columns.find(c => c.name === 'Attendance_Rate');
+    if (!attCol || attCol.type !== 'numeric') {
+      throw new Error('Attendance_Rate with percentages should be recognized as numeric');
+    }
+  });
+
+  recordTest('Dataset 8 - AI Deterministic Execution', 'Plans and computes Average GPA by Major accurately', () => {
+    const plan = {
+      operation: 'group_aggregate' as const,
+      metric: 'GPA',
+      group_by: ['Major'],
+      aggregation: 'mean' as const,
+      visualization: { type: 'bar' as const, x: 'Major', y: 'GPA', title: 'Average GPA by Major' },
+    };
+    const exec = executeAnalysisPlan(studentRows, studentProfile, plan);
+    if (!exec.success || !exec.data || !exec.data.items) {
+      throw new Error('Failed to execute GPA by Major plan: ' + JSON.stringify(exec));
+    }
+    const csItem = exec.data.items.find((it: any) => it.category === 'Computer Science');
+    if (!csItem) throw new Error('Computer Science major missing from aggregation');
+    // CS GPAs: 3.85 + 3.91 = 7.76 / 2 = 3.88
+    if (Math.abs(csItem.value - 3.88) > 0.05) {
+      throw new Error(`Expected CS average GPA ~3.88, got ${csItem.value}`);
+    }
+  });
+
+  recordTest('Dataset 8 - AI Suggestions Field Reading', 'Questions read GPA and Major without hallucinating non-existent concepts', () => {
+    const suggestions = generateSchemaGroundedSuggestions(studentProfile, { count: 4 });
+    for (const q of suggestions) {
+      const val = validateSuggestedQuestion(q, studentProfile);
+      if (!val.valid) throw new Error(`Question "${q}" failed validation: ${val.reason}`);
+      if (/\brevenue\b/i.test(q)) throw new Error(`Ungrounded 'revenue' in student question: "${q}"`);
+      if (/\bsalary\b/i.test(q)) throw new Error(`Ungrounded 'salary' in student question: "${q}"`);
+    }
+    const allText = suggestions.join(' ');
+    if (!allText.includes('GPA') && !allText.includes('Major') && !allText.includes('Attendance_Rate')) {
+      throw new Error('Suggestions failed to ground in academic columns');
+    }
+  });
+
+  // ============================================================================
+  // DATASET 9: Novel IoT Telemetry (Novel, Unseen Domain Column Names)
+  // ============================================================================
+  console.log('\n[Dataset 9] Novel IoT Sensor Telemetry: Testing dynamic field reading on unseen schema');
+  const iotRows = [
+    { Device_UUID: 'D-101', Vibration_Amplitude_mm: 0.12, Bearing_Temp_C: 62.4, Rotational_Speed_RPM: 1780, Constant_Voltage_V: 24.0 },
+    { Device_UUID: 'D-102', Vibration_Amplitude_mm: 0.15, Bearing_Temp_C: 65.1, Rotational_Speed_RPM: 1795, Constant_Voltage_V: 24.0 },
+    { Device_UUID: 'D-103', Vibration_Amplitude_mm: 0.28, Bearing_Temp_C: 78.9, Rotational_Speed_RPM: 1820, Constant_Voltage_V: 24.0 },
+    { Device_UUID: 'D-104', Vibration_Amplitude_mm: 0.11, Bearing_Temp_C: 61.8, Rotational_Speed_RPM: 1775, Constant_Voltage_V: 24.0 },
+    { Device_UUID: 'D-105', Vibration_Amplitude_mm: 0.35, Bearing_Temp_C: 84.2, Rotational_Speed_RPM: 1850, Constant_Voltage_V: 24.0 },
+    { Device_UUID: 'D-106', Vibration_Amplitude_mm: 0.14, Bearing_Temp_C: 63.7, Rotational_Speed_RPM: 1790, Constant_Voltage_V: 24.0 },
+  ];
+  const iotProfile = profileDataset(iotRows, 'turbine_sensors.csv', 'ds-iot-001');
+
+  recordTest('Dataset 9 - Dynamic Field Extraction', 'Dynamically reads novel sensor column names into suggestion questions', () => {
+    const suggestions = generateSchemaGroundedSuggestions(iotProfile, { count: 5 });
+    if (suggestions.length === 0) throw new Error('No suggestions generated for IoT dataset');
+
+    for (const q of suggestions) {
+      const val = validateSuggestedQuestion(q, iotProfile);
+      if (!val.valid) throw new Error(`IoT suggestion "${q}" failed validation: ${val.reason}`);
+    }
+
+    const allText = suggestions.join(' ');
+    // Must directly use the actual novel column names
+    const usesNovelFields =
+      allText.includes('Vibration_Amplitude_mm') ||
+      allText.includes('Bearing_Temp_C') ||
+      allText.includes('Rotational_Speed_RPM') ||
+      allText.includes('Device_UUID');
+
+    if (!usesNovelFields) {
+      throw new Error(`Suggestions did not incorporate novel sensor fields. Got: ${allText}`);
+    }
+  });
+
+  recordTest('Dataset 9 - Zero-Variance Correlation Safety', 'Handles zero-variance column Constant_Voltage_V with 0 instead of NaN', () => {
+    const corr = calculateCorrelationMatrix(iotRows, iotProfile);
+    const voltIdx = corr.columns.indexOf('Constant_Voltage_V');
+    if (voltIdx !== -1) {
+      for (let j = 0; j < corr.columns.length; j++) {
+        if (voltIdx !== j) {
+          const val = corr.matrix[voltIdx][j];
+          if (isNaN(val)) throw new Error('NaN found for zero-variance voltage column');
+          if (val !== 0) throw new Error(`Expected correlation 0 for constant column, got ${val}`);
+        }
       }
     }
   });

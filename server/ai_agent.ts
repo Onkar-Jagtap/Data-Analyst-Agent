@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import { AnalysisPlan, ColumnProfile, DataHandlingReport, DatasetProfile } from './types.js';
 import {
   resolveColumn,
@@ -7,22 +6,7 @@ import {
   validateAndRepairPlan,
   applyFollowUpContext,
 } from './query_resolver.js';
-
-let aiClient: GoogleGenAI | null = null;
-
-function getAiClient(): GoogleGenAI | null {
-  if (!aiClient && process.env.GEMINI_API_KEY) {
-    aiClient = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  }
-  return aiClient;
-}
+import { generateWithGemini, getGeminiClient, getAiClient } from './gemini_client.js';
 
 // ----------------------------------------------------
 // DETERMINISTIC INTENT PARSER (Always available fallback)
@@ -356,15 +340,15 @@ User Question: "${question}"
 Generate the JSON execution plan. Return ONLY raw JSON without markdown code fences.`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-flash-latest',
+    const response = await generateWithGemini({
+      preferredModel: 'gemini-3.6-flash',
       contents: prompt,
       config: {
         systemInstruction,
         temperature: 0.1,
         responseMimeType: 'application/json',
       },
-    });
+    }, ai);
 
     const text = response.text ? response.text.trim() : '';
     const parsed = JSON.parse(text);
@@ -381,8 +365,8 @@ Generate the JSON execution plan. Return ONLY raw JSON without markdown code fen
     }
 
     return finalPlan;
-  } catch (err) {
-    console.warn('Gemini planning failed or timed out; using deterministic planner fallback:', err);
+  } catch (err: any) {
+    console.log('[AI Agent] Gemini planning unavailable or rate-limited; utilizing verified deterministic query planner.');
     return parseIntentDeterministic(question, profile, previousPlan);
   }
 }
@@ -458,14 +442,14 @@ Return raw JSON:
 }`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-flash-latest',
+    const response = await generateWithGemini({
+      preferredModel: 'gemini-3.6-flash',
       contents: prompt,
       config: {
         temperature: 0.2,
         responseMimeType: 'application/json',
       },
-    });
+    }, ai);
 
     const text = response.text ? response.text.trim() : '';
     const parsed = JSON.parse(text);
@@ -473,8 +457,8 @@ Return raw JSON:
       answer: parsed.answer || deterministicFallback().answer,
       businessInterpretation: Array.isArray(parsed.businessInterpretation) ? parsed.businessInterpretation : deterministicFallback().businessInterpretation,
     };
-  } catch (err) {
-    console.warn('Gemini explanation failed or timed out; using deterministic explainer fallback:', err);
+  } catch (err: any) {
+    console.log('[AI Agent] Gemini explanation unavailable or rate-limited; utilizing verified deterministic explainer.');
     return deterministicFallback();
   }
 }

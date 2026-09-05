@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
   BrainCircuit,
@@ -22,7 +22,11 @@ import { AnalysisResult, DatasetProfile } from '../types.js';
 import { PlotlyChart } from './PlotlyChart.js';
 import { DataHandlingPanel } from './DataHandlingPanel.js';
 import { CodeExportModal } from './CodeExportModal.js';
-import { generateReproducibleCode } from '../api.js';
+import {
+  fetchSuggestedQuestions,
+  generateReproducibleCode,
+  generateSchemaGroundedSuggestions,
+} from '../api.js';
 
 interface AskDataViewProps {
   profile: DatasetProfile;
@@ -52,14 +56,29 @@ export const AskDataView: React.FC<AskDataViewProps> = ({
   const [sqlCode, setSqlCode] = useState('');
   const [codeLoading, setCodeLoading] = useState(false);
 
-  const samplePrompts = [
-    'Which region generates the highest revenue?',
-    'Show monthly revenue trend over time.',
-    'Which product category is most profitable?',
-    'Analyze correlation between quantity and revenue.',
-    'Compare revenue and profit across customer segments.',
-    'What is the overall average profit?',
-  ];
+  // Dynamic schema-grounded and contextual follow-up suggestions
+  const [suggestions, setSuggestions] = useState<string[]>(() =>
+    generateSchemaGroundedSuggestions(profile, { lastResult: activeResult, count: 6 })
+  );
+
+  useEffect(() => {
+    // Immediate synchronous grounded suggestions
+    const immediate = generateSchemaGroundedSuggestions(profile, { lastResult: activeResult, count: 6 });
+    setSuggestions(immediate);
+
+    // Asynchronously fetch AI-enhanced or server suggestions
+    fetchSuggestedQuestions(profile.id, profile, {
+      lastQuestion: activeResult?.answerSummary || history[0]?.userQuestion || history[0]?.question,
+      lastResult: activeResult,
+      count: 6,
+    })
+      .then(res => {
+        if (res && res.length > 0) {
+          setSuggestions(res);
+        }
+      })
+      .catch(() => {});
+  }, [profile, activeResult]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -119,7 +138,11 @@ export const AskDataView: React.FC<AskDataViewProps> = ({
             value={questionInput}
             onChange={e => setQuestionInput(e.target.value)}
             disabled={loading}
-            placeholder="Ask anything (e.g., Which region generates highest revenue? Or show monthly sales trend...)"
+            placeholder={
+              suggestions[0]
+                ? `Ask anything (e.g., ${suggestions[0]})`
+                : `Ask anything about ${profile.filename}...`
+            }
             className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors disabled:opacity-50"
           />
           <button
@@ -138,8 +161,10 @@ export const AskDataView: React.FC<AskDataViewProps> = ({
 
         {/* Suggestion Chips */}
         <div className="flex flex-wrap items-center gap-1.5 mt-3">
-          <span className="text-[11px] text-slate-500 font-medium">Suggestions:</span>
-          {samplePrompts.map((prompt, idx) => (
+          <span className="text-[11px] text-slate-500 font-medium">
+            {activeResult ? 'Follow-up suggestions:' : 'Suggested queries:'}
+          </span>
+          {suggestions.map((prompt, idx) => (
             <button
               key={idx}
               onClick={() => onAskQuestion(prompt)}

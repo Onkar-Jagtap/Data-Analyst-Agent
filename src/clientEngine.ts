@@ -22,6 +22,7 @@ import {
 } from '../server/query_resolver.js';
 import { performDataCleaning } from '../server/cleaner.js';
 import { performTransformation } from '../server/transformer.js';
+import { generateSchemaGroundedSuggestions } from '../server/suggestion_generator.js';
 import { AnalysisPlan } from '../server/types.js';
 import {
   AnalysisResult,
@@ -58,14 +59,43 @@ class ClientAnalyticsEngine {
   public getActiveDataset(): ClientStoredDataset | null {
     if (!this.activeDatasetId) {
       const first = Array.from(this.datasets.values())[0];
-      return first || null;
+      if (first) {
+        this.activeDatasetId = first.id;
+        return first;
+      }
+      return null;
     }
-    return this.datasets.get(this.activeDatasetId) || null;
+    return this.datasets.get(this.activeDatasetId) || Array.from(this.datasets.values())[0] || null;
+  }
+
+  public hasDataset(id?: string): boolean {
+    if (!id || id === 'active') return this.datasets.size > 0;
+    return this.datasets.has(id) || (id.startsWith('sample-') && Array.from(this.datasets.values()).some(d => d.isSample));
   }
 
   public getDataset(id?: string): ClientStoredDataset | null {
-    if (!id || id === 'active') return this.getActiveDataset();
-    return this.datasets.get(id) || null;
+    if (!id || id === 'active') {
+      const active = this.getActiveDataset();
+      if (active) return active;
+      this.initSampleDataset();
+      return this.getActiveDataset();
+    }
+    if (this.datasets.has(id)) return this.datasets.get(id)!;
+
+    // Check if ID is a sample or matches any sample
+    if (id.startsWith('sample-')) {
+      for (const ds of this.datasets.values()) {
+        if (ds.isSample) return ds;
+      }
+    }
+
+    // Fall back to active dataset if available
+    const active = this.getActiveDataset();
+    if (active) return active;
+
+    // Auto-bootstrap sample dataset if client storage is empty or requested dataset is missing
+    this.initSampleDataset(id);
+    return this.getActiveDataset();
   }
 
   public listDatasets(): {
@@ -100,13 +130,13 @@ class ClientAnalyticsEngine {
     return ds.profile;
   }
 
-  public initSampleDataset(): {
+  public initSampleDataset(preferredId?: string): {
     profile: DatasetProfile;
     quality: DataQualityAudit;
     insights: InsightItem[];
   } {
     const rows = generateSampleBusinessDataset();
-    const id = 'sample-b2b-sales-client';
+    const id = preferredId || 'sample-b2b-sales-client';
     const profile = profileDataset(rows, 'enterprise_sales_sample.csv', id) as DatasetProfile;
     const quality = auditDataQuality(rows, profile) as DataQualityAudit;
     const insights = generateAutomatedInsights(rows, profile) as InsightItem[];
@@ -123,13 +153,45 @@ class ClientAnalyticsEngine {
     };
 
     this.datasets.set(id, stored);
+    if (id !== 'sample-b2b-sales-client') {
+      this.datasets.set('sample-b2b-sales-client', stored);
+    }
     this.activeDatasetId = id;
     this.undoHistory.set(id, []);
 
     return { profile, quality, insights };
   }
 
-  public async uploadDataset(file: File): Promise<{
+  public syncFromSample(
+    id: string,
+    profile: DatasetProfile,
+    qualityAudit?: DataQualityAudit,
+    insights?: InsightItem[]
+  ): void {
+    const rows = generateSampleBusinessDataset();
+    const quality = qualityAudit || (auditDataQuality(rows, profile) as DataQualityAudit);
+    const ins = insights || (generateAutomatedInsights(rows, profile) as InsightItem[]);
+
+    const stored: ClientStoredDataset = {
+      id,
+      filename: profile.filename || 'enterprise_sales_sample.csv',
+      rawRows: rows,
+      profile,
+      qualityAudit: quality,
+      insights: ins,
+      isSample: true,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.datasets.set(id, stored);
+    if (id !== 'sample-b2b-sales-client') {
+      this.datasets.set('sample-b2b-sales-client', stored);
+    }
+    this.activeDatasetId = id;
+    this.undoHistory.set(id, []);
+  }
+
+  public async uploadDataset(file: File, customId?: string): Promise<{
     profile: DatasetProfile;
     quality: DataQualityAudit;
     insights: InsightItem[];
@@ -165,7 +227,7 @@ class ClientAnalyticsEngine {
       throw new Error('Uploaded dataset is empty.');
     }
 
-    const id = `ds-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+    const id = customId || `ds-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
     const profile = profileDataset(rows, file.name, id) as DatasetProfile;
     const quality = auditDataQuality(rows, profile) as DataQualityAudit;
     const insights = generateAutomatedInsights(rows, profile) as InsightItem[];
@@ -214,7 +276,11 @@ class ClientAnalyticsEngine {
       timeGranularity?: string;
     }
   ) {
-    const ds = this.getDataset(datasetId);
+    let ds = this.getDataset(datasetId) || this.getActiveDataset();
+    if (!ds) {
+      this.initSampleDataset(datasetId);
+      ds = this.getActiveDataset();
+    }
     if (!ds) throw new Error('Dataset not found in client storage.');
 
     const { type, xAxis, yAxis, aggregation = 'sum', categoryFilter } = params;
@@ -900,6 +966,16 @@ class ClientAnalyticsEngine {
     });
 
     return Papa.unparse(res.rows);
+  }
+
+  public getSuggestedQuestions(
+    datasetId?: string,
+    profileOverride?: DatasetProfile,
+    options?: { lastQuestion?: string; lastResult?: any; count?: number }
+  ): string[] {
+    const prof = profileOverride || (datasetId ? this.getDataset(datasetId)?.profile : this.getActiveDataset()?.profile);
+    if (!prof) return [];
+    return generateSchemaGroundedSuggestions(prof, options);
   }
 }
 

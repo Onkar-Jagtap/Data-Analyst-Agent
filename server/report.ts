@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import {
   BusinessCalculations,
   DataQualityAudit,
@@ -10,22 +9,7 @@ import {
 import { auditDataQuality } from './quality.js';
 import { computeDashboardData } from './dashboard.js';
 import { generateAutomatedInsights } from './insights.js';
-
-let aiClient: GoogleGenAI | null = null;
-
-function getAiClient(): GoogleGenAI | null {
-  if (!aiClient && process.env.GEMINI_API_KEY) {
-    aiClient = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  }
-  return aiClient;
-}
+import { generateWithGemini, getGeminiClient, getAiClient } from './gemini_client.js';
 
 /**
  * Generates an end-to-end Executive Business Intelligence & Strategy Report
@@ -94,8 +78,8 @@ export async function generateExecutiveReport(
           actionPlan.splice(0, actionPlan.length, ...enrichedBrief.actionPlan);
         }
       }
-    } catch (err) {
-      console.warn('[Report] Gemini AI enrichment skipped or timed out, using verified deterministic brief:', err);
+    } catch (err: any) {
+      console.log('[Report] AI enrichment unavailable or rate-limited; presenting verified deterministic executive brief.');
     }
   }
 
@@ -643,14 +627,14 @@ Return a valid JSON object ONLY (no markdown fences, no raw text around it) with
   ]
 }`;
 
-  const response = await client.models.generateContent({
-    model: 'gemini-2.5-flash',
+  const response = await generateWithGemini({
+    preferredModel: 'gemini-3.6-flash',
     contents: prompt,
     config: {
       temperature: 0.2,
       responseMimeType: 'application/json',
     },
-  });
+  }, client);
 
   const text = response.text || '';
   const parsed = JSON.parse(text);

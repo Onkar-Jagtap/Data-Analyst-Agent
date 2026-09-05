@@ -19,6 +19,11 @@ import { evaluateBusinessAssertions } from './quality.js';
 import { isNullOrEmpty, parseCleanNumber, profileDataset } from './profiler.js';
 import { computeDashboardData } from './dashboard.js';
 import { generateExecutiveReport } from './report.js';
+import {
+  generateSuggestionsForDataset,
+  generateSchemaGroundedSuggestions,
+  validateSuggestedQuestion,
+} from './suggestion_generator.js';
 import { AnalysisResult, BusinessAssertion, TransformRequest } from './types.js';
 
 dotenv.config();
@@ -479,6 +484,67 @@ app.post('/api/query/:id', async (req, res) => {
   }
 });
 
+// Grounded Suggested Questions Endpoint (GET)
+app.get('/api/suggestions/:id', async (req, res) => {
+  const sid = getSessionId(req);
+  try {
+    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    if (!dataset) {
+      return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    }
+
+    const suggestions = await generateSuggestionsForDataset(dataset.profile, {
+      useAi: true,
+      count: 6,
+    });
+
+    res.json({
+      success: true,
+      data: suggestions,
+    });
+  } catch (err: any) {
+    console.log('[Suggestions API] Serving schema-grounded deterministic suggestions fallback.');
+    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const fallbackSuggestions = dataset ? generateSchemaGroundedSuggestions(dataset.profile) : [];
+    res.json({
+      success: true,
+      data: fallbackSuggestions,
+    });
+  }
+});
+
+// Grounded Suggested Questions Endpoint (POST with context / follow-ups)
+app.post('/api/suggestions/:id', async (req, res) => {
+  const sid = getSessionId(req);
+  try {
+    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    if (!dataset) {
+      return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    }
+
+    const { lastQuestion, lastResult, count } = req.body || {};
+    const suggestions = await generateSuggestionsForDataset(dataset.profile, {
+      useAi: true,
+      lastQuestion,
+      lastResult,
+      count: count || 6,
+    });
+
+    res.json({
+      success: true,
+      data: suggestions,
+    });
+  } catch (err: any) {
+    console.log('[Suggestions API] Serving schema-grounded deterministic suggestions fallback.');
+    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const fallbackSuggestions = dataset ? generateSchemaGroundedSuggestions(dataset.profile) : [];
+    res.json({
+      success: true,
+      data: fallbackSuggestions,
+    });
+  }
+});
+
 // Visual Studio Custom Chart Builder Endpoint
 app.post('/api/chart/:id', (req, res) => {
   const sid = getSessionId(req);
@@ -494,13 +560,17 @@ app.post('/api/chart/:id', (req, res) => {
     if (type === 'heatmap') {
       const corr = calculateCorrelationMatrix(dataset.rawRows, dataset.profile);
       const chart = generatePlotlyFigure('heatmap', corr, 'Multi-Variable Correlation Matrix');
-      return res.json({
-        success: true,
+      const payload = {
         chart,
         summaryMetrics: [
           { label: 'Numeric Dimensions', value: `${corr.columns.length}` },
           { label: 'Pairwise Comparisons', value: `${corr.columns.length * corr.columns.length}` },
         ],
+      };
+      return res.json({
+        success: true,
+        ...payload,
+        data: payload,
       });
     }
 
@@ -547,8 +617,7 @@ app.post('/api/chart/:id', (req, res) => {
         items: combinedItems,
       }, `${primaryMetric} & ${secondaryMetric} by ${groupCol}`);
 
-      return res.json({
-        success: true,
+      const payload = {
         chart,
         dataHandling: exec1.dataHandling,
         summaryMetrics: [
@@ -556,6 +625,11 @@ app.post('/api/chart/:id', (req, res) => {
           { label: 'Primary (Bar)', value: primaryMetric },
           { label: 'Secondary (Line)', value: secondaryMetric },
         ],
+      };
+      return res.json({
+        success: true,
+        ...payload,
+        data: payload,
       });
     }
 
@@ -574,11 +648,15 @@ app.post('/api/chart/:id', (req, res) => {
       };
       const exec = executeAnalysisPlan(dataset.rawRows, dataset.profile, plan as any);
       const chart = generatePlotlyFigure(type, exec.data, `${type === 'treemap' ? 'Treemap' : 'Sunburst'} of ${metric} by ${groupCol}`);
-      return res.json({
-        success: true,
+      const payload = {
         chart,
         dataHandling: exec.dataHandling,
         summaryMetrics: exec.summaryMetrics,
+      };
+      return res.json({
+        success: true,
+        ...payload,
+        data: payload,
       });
     }
 
@@ -612,14 +690,18 @@ app.post('/api/chart/:id', (req, res) => {
         yAxis: metric,
       }, `${yAxis} by ${xAxis} grouped by ${colorDimension}`);
 
-      return res.json({
-        success: true,
+      const payload = {
         chart,
         summaryMetrics: [
           { label: 'Category X', value: xCol },
           { label: 'Color Group', value: cCol },
           { label: 'Group Count', value: `${groupedTraces.length}` },
         ],
+      };
+      return res.json({
+        success: true,
+        ...payload,
+        data: payload,
       });
     }
 
@@ -647,11 +729,15 @@ app.post('/api/chart/:id', (req, res) => {
 
     const chart = generatePlotlyFigure(type || 'bar', execution.data, plan.visualization.title);
 
-    res.json({
-      success: true,
+    const payload = {
       chart,
       dataHandling: execution.dataHandling,
       summaryMetrics: execution.summaryMetrics,
+    };
+    res.json({
+      success: true,
+      ...payload,
+      data: payload,
     });
   } catch (err: any) {
     console.error('Visual studio error:', err);

@@ -69,14 +69,16 @@ export const VisualStudioView: React.FC<VisualStudioViewProps> = ({
     setLoading(true);
     setError(null);
     try {
+      const currentX = xAxis || catCols[0]?.name || profile.columns[0]?.name || 'Category';
+      const currentY = yAxis || numCols[0]?.name || profile.columns[1]?.name || 'Value';
       const res = await generateCustomChart(profile.id, {
         type: chartType,
-        xAxis,
-        yAxis,
-        secondaryYAxis: chartType === 'combo' ? secondaryYAxis : undefined,
+        xAxis: currentX,
+        yAxis: currentY,
+        secondaryYAxis: chartType === 'combo' ? (secondaryYAxis || numCols[1]?.name || currentY) : undefined,
         colorDimension: colorDimension || undefined,
         aggregation,
-        sortBy: yAxis,
+        sortBy: currentY,
         sortDirection: sortDir,
         topN,
       });
@@ -91,9 +93,11 @@ export const VisualStudioView: React.FC<VisualStudioViewProps> = ({
 
   const handlePin = () => {
     if (!figure || !onPinChart) return;
+    const currentX = xAxis || catCols[0]?.name || profile.columns[0]?.name || 'Category';
+    const currentY = yAxis || numCols[0]?.name || profile.columns[1]?.name || 'Value';
     const title = chartType === 'combo'
-      ? `${yAxis} & ${secondaryYAxis} by ${xAxis}`
-      : `${aggregation.toUpperCase()} of ${yAxis} by ${xAxis}`;
+      ? `${currentY} & ${secondaryYAxis || currentY} by ${currentX}`
+      : `${aggregation.toUpperCase()} of ${currentY} by ${currentX}`;
 
     onPinChart({
       id: `pin_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -102,8 +106,8 @@ export const VisualStudioView: React.FC<VisualStudioViewProps> = ({
       datasetId: profile.id,
       timestamp: Date.now(),
       type: chartType,
-      xAxis,
-      yAxis,
+      xAxis: currentX,
+      yAxis: currentY,
     });
     setPinnedSuccess(true);
     setTimeout(() => setPinnedSuccess(false), 2500);
@@ -112,11 +116,13 @@ export const VisualStudioView: React.FC<VisualStudioViewProps> = ({
   const handleOpenCodeModal = async () => {
     setCodeLoading(true);
     try {
+      const currentX = xAxis || catCols[0]?.name || profile.columns[0]?.name || 'Category';
+      const currentY = yAxis || numCols[0]?.name || profile.columns[1]?.name || 'Value';
       const codeRes = await generateReproducibleCode({
         filename: profile.filename,
-        metric: yAxis,
-        xAxis,
-        yAxis,
+        metric: currentY,
+        xAxis: currentX,
+        yAxis: currentY,
         aggregation,
         sortDirection: sortDir,
         limit: topN,
@@ -132,6 +138,15 @@ export const VisualStudioView: React.FC<VisualStudioViewProps> = ({
   };
 
   useEffect(() => {
+    const newNumCols = profile.columns.filter(c => c.type === 'numeric');
+    const newCatCols = profile.columns.filter(c => c.type === 'categorical' || c.type === 'text');
+    const defaultX = initialSuggestion?.x || (newCatCols[0]?.name || profile.columns[0]?.name || '');
+    const defaultY = initialSuggestion?.y || (newNumCols[0]?.name || profile.columns[1]?.name || '');
+    setXAxis(defaultX);
+    setYAxis(defaultY);
+    if (newNumCols[1]) {
+      setSecondaryYAxis(newNumCols[1].name);
+    }
     handleGenerate();
   }, [profile.id]);
 

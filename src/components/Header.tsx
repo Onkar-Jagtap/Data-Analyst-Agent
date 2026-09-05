@@ -145,7 +145,7 @@ export const Header: React.FC<HeaderProps> = ({
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Ask anything about your data... (e.g., top regions by profit margin)"
+            placeholder="Ask anything about your data... (e.g., rankings, trends, distributions)"
             value={quickInput}
             onChange={e => setQuickInput(e.target.value)}
             className="w-full bg-slate-900/80 border border-slate-800/90 rounded-full pl-9 pr-24 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors shadow-inner"

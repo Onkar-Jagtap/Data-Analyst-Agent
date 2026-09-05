@@ -50,7 +50,8 @@ async function safeJsonFetch<T = any>(
       const text = await res.text();
       try {
         const json = JSON.parse(text);
-        return { ok: false, data: json, status: res.status, errorMsg: json.error?.message || json.message };
+        const errStr = typeof json.error === 'string' ? json.error : (json.error?.message || json.message);
+        return { ok: false, data: json, status: res.status, errorMsg: errStr };
       } catch {
         return { ok: false, data: null, status: res.status, errorMsg: `HTTP ${res.status}` };
       }
@@ -120,6 +121,9 @@ export async function loadSampleDataset(): Promise<{ profile: DatasetProfile; qu
     }
   );
   if (res.ok && res.data && res.data.success && res.data.data) {
+    try {
+      clientEngine.syncFromSample(res.data.data.profile.id, res.data.data.profile, res.data.data.quality, res.data.data.insights);
+    } catch {}
     return res.data.data;
   }
   // Autonomous browser engine generation
@@ -140,6 +144,9 @@ export async function uploadDataset(file: File): Promise<{ datasetId: string; pr
   });
 
   if (res.ok && res.data && res.data.success && res.data.data) {
+    try {
+      clientEngine.uploadDataset(file, res.data.data.datasetId).catch(() => {});
+    } catch {}
     return res.data.data;
   }
 
@@ -241,7 +248,7 @@ export async function generateCustomChart(
     topN?: number;
   }
 ): Promise<{ chart: any; dataHandling?: any; summaryMetrics?: any[] }> {
-  const res = await safeJsonFetch<{ success: boolean; data: { chart: any; dataHandling?: any; summaryMetrics?: any[] } }>(
+  const res = await safeJsonFetch<any>(
     `/api/chart/${datasetId}`,
     {
       method: 'POST',
@@ -249,16 +256,34 @@ export async function generateCustomChart(
       body: JSON.stringify(params),
     }
   );
-  if (res.ok && res.data && res.data.success && res.data.data) {
-    return res.data.data;
+
+  if (res.ok && res.data && res.data.success !== false) {
+    const chart = res.data.chart || res.data.data?.chart;
+    if (chart) {
+      return {
+        chart,
+        dataHandling: res.data.dataHandling || res.data.data?.dataHandling,
+        summaryMetrics: res.data.summaryMetrics || res.data.data?.summaryMetrics,
+      };
+    }
   }
-  const chart = clientEngine.generateCustomChart(datasetId, {
-    type: params.type,
-    xAxis: params.xAxis || 'Category',
-    yAxis: params.yAxis,
-    aggregation: params.aggregation,
-  });
-  return { chart };
+
+  // Graceful browser-side engine fallback
+  try {
+    const chart = clientEngine.generateCustomChart(datasetId, {
+      type: params.type,
+      xAxis: params.xAxis || 'Category',
+      yAxis: params.yAxis,
+      aggregation: params.aggregation,
+    });
+    if (chart) {
+      return { chart };
+    }
+  } catch (clientErr: any) {
+    console.warn('Client chart generation fallback:', clientErr);
+  }
+
+  throw new Error(res.errorMsg || 'Failed to generate visualization');
 }
 
 export async function fetchExplorerData(
@@ -473,4 +498,26 @@ export async function fetchExecutiveReport(datasetId: string, useAi = true): Pro
     return res.data.data;
   }
   return clientEngine.getExecutiveReport(datasetId);
+}
+
+export {
+  generateSchemaGroundedSuggestions,
+  validateSuggestedQuestion,
+  detectDatasetDomain,
+} from '../server/suggestion_generator.js';
+
+export async function fetchSuggestedQuestions(
+  datasetId: string,
+  profile: DatasetProfile,
+  options?: { lastQuestion?: string; lastResult?: any; count?: number }
+): Promise<string[]> {
+  const res = await safeJsonFetch<{ success: boolean; data: string[] }>(`/api/suggestions/${datasetId}`, {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(options || {}),
+  });
+  if (res.ok && res.data && res.data.success && Array.isArray(res.data.data) && res.data.data.length > 0) {
+    return res.data.data;
+  }
+  return clientEngine.getSuggestedQuestions(datasetId, profile, options);
 }

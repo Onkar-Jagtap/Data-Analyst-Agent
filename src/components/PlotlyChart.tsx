@@ -1,6 +1,53 @@
 import React, { useEffect, useRef } from 'react';
 import Plotly from 'plotly.js-dist-min';
 
+// Global resilience patch: prevent internal Plotly auto-margin redraws from accessing undefined _fullLayout
+if (typeof window !== 'undefined') {
+  window.addEventListener('error', (event) => {
+    if (event?.message && event.message.includes('_redrawFromAutoMarginCount')) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    const reasonMsg = event?.reason?.message || String(event?.reason || '');
+    if (reasonMsg.includes('_redrawFromAutoMarginCount')) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
+}
+
+// Intercept Plotly.purge to ensure the detached element retains a safe layout stub
+if (typeof Plotly !== 'undefined' && Plotly.purge && !(Plotly as any).__patchedPurge) {
+  const originalPurge = Plotly.purge;
+  Plotly.purge = function (el: any) {
+    if (!el) return;
+    try {
+      originalPurge.call(Plotly, el);
+    } catch {
+      // Ignore internal Plotly teardown errors on detached elements
+    } finally {
+      if (el) {
+        try {
+          // Provide safe layout stub so in-flight microtasks/callbacks (e.g. iA, N0t)
+          // accessing _redrawFromAutoMarginCount evaluate cleanly without throwing
+          el._fullLayout = {
+            _redrawFromAutoMarginCount: 0,
+            _visibleModules: [],
+            _replotting: true,
+            automargin: false,
+          };
+        } catch {
+          // Ignore
+        }
+      }
+    }
+  };
+  (Plotly as any).__patchedPurge = true;
+}
+
 interface PlotlyChartProps {
   figure: {
     data: any[];
@@ -12,14 +59,84 @@ interface PlotlyChartProps {
 
 export const PlotlyChart: React.FC<PlotlyChartProps> = ({ figure, className = 'w-full h-80' }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const isMountedRef = useRef(true);
+  const rafResizeRef = useRef<number | null>(null);
+  const chartIdRef = useRef<string>(`chart-${Math.random().toString(36).substring(2, 11)}`);
 
+  // Setup ResizeObserver and handle teardown ONLY on unmount
   useEffect(() => {
-    if (!containerRef.current || !figure || !figure.data) return;
-
+    isMountedRef.current = true;
     const el = containerRef.current;
+    if (!el) return;
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        if (!isMountedRef.current || !el || !(el as any)._fullLayout || !document.body.contains(el)) {
+          return;
+        }
+
+        if (rafResizeRef.current) {
+          cancelAnimationFrame(rafResizeRef.current);
+        }
+
+        rafResizeRef.current = requestAnimationFrame(() => {
+          if (isMountedRef.current && el && (el as any)._fullLayout && document.body.contains(el)) {
+            try {
+              Plotly.Plots.resize(el);
+            } catch {
+              // Ignore resize errors during fast transitions
+            }
+          }
+        });
+      });
+      resizeObserver.observe(el);
+    }
+
+    return () => {
+      isMountedRef.current = false;
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      if (rafResizeRef.current) {
+        cancelAnimationFrame(rafResizeRef.current);
+      }
+      if (el) {
+        try {
+          Plotly.purge(el);
+        } catch {
+          // Ignore purge errors
+        }
+        // Guarantee safe layout stub after unmount
+        (el as any)._fullLayout = {
+          _redrawFromAutoMarginCount: 0,
+          _visibleModules: [],
+          _replotting: true,
+          automargin: false,
+        };
+      }
+    };
+  }, []);
+
+  // Update chart data/layout without purging the DOM element on every prop change
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !isMountedRef.current) return;
+    if (!figure || !figure.data || !Array.isArray(figure.data) || figure.data.length === 0) {
+      return;
+    }
+
     const layout = {
-      ...figure.layout,
       autosize: true,
+      margin: {
+        l: 50,
+        r: 30,
+        t: 40,
+        b: 50,
+        pad: 4,
+        ...(figure.layout?.margin || {}),
+      },
+      ...figure.layout,
     };
 
     const config = {
@@ -37,18 +154,12 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({ figure, className = 'w
       ...figure.config,
     };
 
-    Plotly.react(el, figure.data, layout, config);
-
-    const handleResize = () => {
-      Plotly.Plots.resize(el);
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      Plotly.purge(el);
-    };
+    // Plotly.react safely reconciles existing plots in-place
+    Plotly.react(el, figure.data, layout, config).catch(() => {
+      // Safely ignore cancelled / detached rendering promises
+    });
   }, [figure]);
 
-  return <div ref={containerRef} className={className} id={`chart-${Math.random().toString(36).substr(2, 9)}`} />;
+  return <div ref={containerRef} className={className} id={chartIdRef.current} />;
 };
+

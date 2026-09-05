@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { ActiveTab, DataQualityAudit, DatasetProfile, InsightItem } from '../types.js';
 import { PipelineDiagram } from './PipelineDiagram.js';
+import { fetchSuggestedQuestions, generateSchemaGroundedSuggestions } from '../api.js';
 
 interface OverviewViewProps {
   profile: DatasetProfile;
@@ -34,14 +35,24 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onAskQuestion,
 }) => {
   const [askInput, setAskInput] = useState('');
+  const [suggestions, setSuggestions] = useState<string[]>(() =>
+    generateSchemaGroundedSuggestions(profile, { count: 5 })
+  );
 
-  const sampleQuestions = [
-    'Which region generates the highest revenue?',
-    'Show monthly revenue trend over time.',
-    'Which product category is most profitable?',
-    'Analyze correlation between quantity and revenue.',
-    'What is the overall average profit?',
-  ];
+  useEffect(() => {
+    // Generate immediate synchronous grounded suggestions
+    const immediate = generateSchemaGroundedSuggestions(profile, { count: 5 });
+    setSuggestions(immediate);
+
+    // Asynchronously fetch AI-enhanced or server suggestions
+    fetchSuggestedQuestions(profile.id, profile, { count: 5 })
+      .then(res => {
+        if (res && res.length > 0) {
+          setSuggestions(res);
+        }
+      })
+      .catch(() => {});
+  }, [profile]);
 
   const handleAskSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -201,7 +212,11 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             type="text"
             value={askInput}
             onChange={e => setAskInput(e.target.value)}
-            placeholder="e.g. Which region generates the highest revenue? Or show monthly revenue trend..."
+            placeholder={
+              suggestions[0]
+                ? `e.g. ${suggestions[0]}`
+                : `Ask anything about ${profile.filename}...`
+            }
             className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
           />
           <button
@@ -214,8 +229,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 
         {/* Suggestion Chips */}
         <div className="flex flex-wrap items-center gap-1.5 mt-3">
-          <span className="text-[11px] text-slate-500 font-medium">Try asking:</span>
-          {sampleQuestions.map((sq, idx) => (
+          <span className="text-[11px] text-slate-500 font-medium">Dataset suggestions:</span>
+          {suggestions.map((sq, idx) => (
             <button
               key={idx}
               onClick={() => onAskQuestion(sq)}
