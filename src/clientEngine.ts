@@ -875,8 +875,37 @@ class ClientAnalyticsEngine {
       complianceNote: 'Computed with verified in-browser deterministic precision. Privacy Shield active.',
     };
 
-    const pythonScript = `# Autonomous Audit Script for ${profile.filename}\nimport pandas as pd\ndf = pd.read_csv("${profile.filename}")\nprint(df.info())\nprint(df.describe())`;
-    const sqlScript = `-- Audit Query for ${profile.filename}\nSELECT COUNT(*) as total_rows, ROUND(AVG(${profile.columns.find(c => c.type === 'numeric')?.name || 'revenue'}), 2) as avg_val FROM dataset_table;`;
+    const numColName = (profile.columns.find(c => c.type === 'numeric')?.name || 'revenue').replace(/"/g, '""');
+    const catColName = (profile.columns.find(c => c.type === 'categorical')?.name || 'category').replace(/"/g, '""');
+    const pythonScript = `# Autonomous Audit Script for ${profile.filename}
+import pandas as pd
+import numpy as np
+
+df = pd.read_csv("${profile.filename}")
+print(f"Total Rows: {len(df):,}, Columns: {list(df.columns)}")
+
+# Coerce currency/percentages if stored as strings
+for col in df.columns:
+    if df[col].dtype == 'object':
+        cleaned = pd.to_numeric(df[col].astype(str).str.replace(r'[$€£,%\\s]', '', regex=True), errors='coerce')
+        if cleaned.notnull().sum() > len(df) * 0.5:
+            df[col] = cleaned
+
+numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+if numeric_cols:
+    print("Numeric Summary:")
+    print(df[numeric_cols].describe())
+`;
+    const sqlScript = `-- Audit Query for ${profile.filename}
+SELECT 
+    COALESCE("${catColName}", 'Unknown') AS segment,
+    COUNT(*) AS total_rows, 
+    ROUND(AVG("${numColName}"), 2) AS avg_value,
+    ROUND(SUM("${numColName}"), 2) AS total_sum
+FROM dataset_table
+GROUP BY 1
+ORDER BY 4 DESC
+LIMIT 20;`;
 
     const insights = ds.insights || generateAutomatedInsights(rows, profile);
 

@@ -518,6 +518,8 @@ export interface StrategicImprovementAction {
   rootCause: string;
   concreteAction: string;
   expectedFinancialImpact: string;
+  impactMetric?: string;
+  annualEbitdaImpact?: number;
   responsibleRole: string;
   status: 'planned' | 'in_progress' | 'completed';
 }

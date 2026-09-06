@@ -20,6 +20,7 @@ import { isNullOrEmpty, parseCleanNumber, profileDataset } from './profiler.js';
 import { computeDashboardData } from './dashboard.js';
 import { generateExecutiveReport, refineReportSection } from './report.js';
 import { analyzeEnterpriseDatasets } from './company_360.js';
+import { executeSqlQuery } from './sql_engine.js';
 import {
   generateSuggestionsForDataset,
   generateSchemaGroundedSuggestions,
@@ -1021,8 +1022,29 @@ app.post('/api/generate-code', (req, res) => {
   const sortDir = (sortDirection || 'desc').toUpperCase();
   const lim = limit || 10;
 
-  const pandasAgg = agg === 'count' ? 'count()' : `${agg}()`;
-  const sqlAgg = agg.toUpperCase();
+  // Safe Pandas and SQL aggregation mapping
+  let pandasAgg = 'sum()';
+  if (agg === 'mean' || agg === 'avg' || agg === 'average') pandasAgg = 'mean()';
+  else if (agg === 'median') pandasAgg = 'median()';
+  else if (agg === 'count') pandasAgg = 'count()';
+  else if (agg === 'min') pandasAgg = 'min()';
+  else if (agg === 'max') pandasAgg = 'max()';
+  else if (agg === 'std' || agg === 'stddev') pandasAgg = 'std()';
+  else if (agg === 'distinct' || agg === 'count_distinct' || agg === 'unique') pandasAgg = 'nunique()';
+  else pandasAgg = 'sum()';
+
+  let sqlAgg = 'SUM';
+  if (agg === 'mean' || agg === 'avg' || agg === 'average') sqlAgg = 'AVG';
+  else if (agg === 'median') sqlAgg = 'MEDIAN';
+  else if (agg === 'count') sqlAgg = 'COUNT';
+  else if (agg === 'min') sqlAgg = 'MIN';
+  else if (agg === 'max') sqlAgg = 'MAX';
+  else if (agg === 'distinct' || agg === 'count_distinct') sqlAgg = 'COUNT_DISTINCT';
+
+  const safeMet = met.replace(/"/g, '""');
+  const safeGroup = group.replace(/"/g, '""');
+  const pyMet = met.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const pyGroup = group.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
   const python = `import pandas as pd
 import matplotlib.pyplot as plt
@@ -1031,50 +1053,73 @@ import matplotlib.pyplot as plt
 df = pd.read_csv('${file}')
 
 # 2. Numeric normalization & regex cleaning
-df['${met}'] = pd.to_numeric(
-    df['${met}'].astype(str).str.replace(r'[$€£,%]', '', regex=True),
+df['${pyMet}'] = pd.to_numeric(
+    df['${pyMet}'].astype(str).str.replace(r'[$€£,%]', '', regex=True),
     errors='coerce'
 )
 
 # 3. Aggregation & Grouping
 result = (
-    df.dropna(subset=['${met}'])
-      .groupby('${group}')['${met}']
+    df.dropna(subset=['${pyMet}'])
+      .groupby('${pyGroup}')['${pyMet}']
       .${pandasAgg}
       .reset_index()
-      .sort_values(by='${met}', ascending=${sortDir === 'ASC' ? 'True' : 'False'})
+      .sort_values(by='${pyMet}', ascending=${sortDir === 'ASC' ? 'True' : 'False'})
       .head(${lim})
 )
 
 print(result)
 
-# 4. Optional Plotly / Matplotlib Chart
+# 4. Visualization
 # plt.figure(figsize=(10, 5))
-# plt.bar(result['${group}'], result['${met}'], color='#3b82f6')
-# plt.title('${agg.toUpperCase()} of ${met} by ${group}')
+# plt.bar(result['${pyGroup}'].astype(str), result['${pyMet}'], color='#3b82f6')
+# plt.title('${agg.toUpperCase()} of ${pyMet} by ${pyGroup}')
+# plt.xticks(rotation=45, ha='right')
+# plt.tight_layout()
 # plt.show()`;
+
+  const sqlAggExpr = sqlAgg === 'COUNT_DISTINCT'
+    ? `COUNT(DISTINCT "${safeMet}_clean")`
+    : `${sqlAgg}("${safeMet}_clean")`;
 
   const sql = `-- 1. Common Table Expression (CTE) for Data Cleansing
 WITH cleaned_data AS (
   SELECT
-    "${group}",
-    TRY_CAST(REGEXP_REPLACE(CAST("${met}" AS VARCHAR), '[$€£,%]', '') AS DOUBLE) AS "${met}_clean"
+    "${safeGroup}",
+    TRY_CAST(REGEXP_REPLACE(CAST("${safeMet}" AS VARCHAR), '[$€£,%]', '') AS DOUBLE) AS "${safeMet}_clean"
   FROM read_csv_auto('${file}')
-  WHERE "${met}" IS NOT NULL
+  WHERE "${safeMet}" IS NOT NULL
 )
 -- 2. Aggregated Query with Ranking
 SELECT
-  "${group}",
-  ${sqlAgg}("${met}_clean") AS "${agg}_${met.toLowerCase()}"
+  "${safeGroup}",
+  ${sqlAggExpr} AS "${agg}_${safeMet.toLowerCase()}"
 FROM cleaned_data
-GROUP BY "${group}"
-ORDER BY "${agg}_${met.toLowerCase()}" ${sortDir}
+GROUP BY "${safeGroup}"
+ORDER BY "${agg}_${safeMet.toLowerCase()}" ${sortDir}
 LIMIT ${lim};`;
 
   res.json({
     success: true,
     data: { python, sql },
   });
+});
+
+// Interactive SQL Query Execution Endpoint
+app.post('/api/sql/:id', (req, res) => {
+  const sid = getSessionId(req);
+  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  if (!dataset) {
+    return res.status(404).json({ success: false, error: 'Dataset not found.' });
+  }
+
+  const { query } = req.body;
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ success: false, error: 'SQL query string is required.' });
+  }
+
+  const result = executeSqlQuery(dataset.rawRows, query);
+  res.json(result);
 });
 
 // Export Filtered Subset (CSV or JSON)

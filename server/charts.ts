@@ -174,9 +174,14 @@ export function generatePlotlyFigure(
 
   // 2. TREEMAP
   if (type === 'treemap') {
-    const labels = dataPayload.labels || (dataPayload.items ? dataPayload.items.map((i: any) => i.category) : []);
-    const parents = dataPayload.parents || (dataPayload.items ? dataPayload.items.map((i: any) => i.parent || '') : labels.map(() => ''));
-    const values = dataPayload.values || (dataPayload.items ? dataPayload.items.map((i: any) => i.value) : []);
+    const rawLabels = dataPayload.labels || (dataPayload.items ? dataPayload.items.map((i: any) => i.category || i.label || 'Item') : []);
+    const labels = rawLabels.map(String);
+    const rawParents = dataPayload.parents || (dataPayload.items ? dataPayload.items.map((i: any) => i.parent || '') : labels.map(() => ''));
+    // Prevent self-referencing parent cycles which crash Plotly treemap recursion
+    const parents = rawParents.map((p: any, idx: number) => (p === labels[idx] ? '' : (p || '')));
+    const rawValues = dataPayload.values || (dataPayload.items ? dataPayload.items.map((i: any) => i.value) : []);
+    // Plotly requires strictly non-negative values for treemap
+    const values = rawValues.map((v: any) => Math.max(0, Number(v) || 0));
 
     return {
       data: [
@@ -203,9 +208,12 @@ export function generatePlotlyFigure(
 
   // 3. SUNBURST
   if (type === 'sunburst') {
-    const labels = dataPayload.labels || (dataPayload.items ? dataPayload.items.map((i: any) => i.category) : []);
-    const parents = dataPayload.parents || (dataPayload.items ? dataPayload.items.map((i: any) => i.parent || '') : labels.map(() => ''));
-    const values = dataPayload.values || (dataPayload.items ? dataPayload.items.map((i: any) => i.value) : []);
+    const rawLabels = dataPayload.labels || (dataPayload.items ? dataPayload.items.map((i: any) => i.category || i.label || 'Item') : []);
+    const labels = rawLabels.map(String);
+    const rawParents = dataPayload.parents || (dataPayload.items ? dataPayload.items.map((i: any) => i.parent || '') : labels.map(() => ''));
+    const parents = rawParents.map((p: any, idx: number) => (p === labels[idx] ? '' : (p || '')));
+    const rawValues = dataPayload.values || (dataPayload.items ? dataPayload.items.map((i: any) => i.value) : []);
+    const values = rawValues.map((v: any) => Math.max(0, Number(v) || 0));
 
     return {
       data: [
@@ -233,8 +241,8 @@ export function generatePlotlyFigure(
   // 4. BAR CHART
   if (type === 'bar') {
     const items = dataPayload.items || [];
-    const categories = items.map((i: any) => i.category);
-    const values = items.map((i: any) => i.value);
+    const categories = items.map((i: any) => String(i.category ?? i.label ?? i.name ?? 'Item'));
+    const values = items.map((i: any) => Number(i.value ?? i.primaryValue ?? 0));
 
     return {
       data: [
@@ -251,8 +259,8 @@ export function generatePlotlyFigure(
       ],
       layout: {
         ...commonLayout,
-        xaxis: { ...commonLayout.xaxis, title: { text: dataPayload.groupColumn, font: { color: '#9CA3AF' } } },
-        yaxis: { ...commonLayout.yaxis, title: { text: dataPayload.metricColumn, font: { color: '#9CA3AF' } } },
+        xaxis: { ...commonLayout.xaxis, title: { text: dataPayload.groupColumn || 'Category', font: { color: '#9CA3AF' } } },
+        yaxis: { ...commonLayout.yaxis, title: { text: dataPayload.metricColumn || 'Value', font: { color: '#9CA3AF' } } },
       },
       config: commonConfig,
     };
@@ -288,8 +296,10 @@ export function generatePlotlyFigure(
   // 6. SCATTER PLOT
   if (type === 'scatter') {
     const pairs = dataPayload.pairsSample || [];
-    const xVals = pairs.map((p: any) => p[0]);
-    const yVals = pairs.map((p: any) => p[1]);
+    const rawX = dataPayload.x || pairs.map((p: any) => p[0]);
+    const rawY = dataPayload.y || pairs.map((p: any) => p[1]);
+    const xVals = rawX.map((v: any) => Number(v) || 0);
+    const yVals = rawY.map((v: any) => Number(v) || 0);
 
     return {
       data: [
@@ -309,8 +319,8 @@ export function generatePlotlyFigure(
       ],
       layout: {
         ...commonLayout,
-        xaxis: { ...commonLayout.xaxis, title: { text: dataPayload.column1 } },
-        yaxis: { ...commonLayout.yaxis, title: { text: dataPayload.column2 } },
+        xaxis: { ...commonLayout.xaxis, title: { text: dataPayload.column1 || 'X Axis' } },
+        yaxis: { ...commonLayout.yaxis, title: { text: dataPayload.column2 || 'Y Axis' } },
       },
       config: commonConfig,
     };
@@ -319,8 +329,8 @@ export function generatePlotlyFigure(
   // 7. PIE / DONUT CHART
   if (type === 'pie') {
     const items = dataPayload.items || [];
-    const labels = items.map((i: any) => i.category);
-    const values = items.map((i: any) => i.value);
+    const labels = items.map((i: any) => String(i.category ?? i.label ?? 'Item'));
+    const values = items.map((i: any) => Math.max(0, Number(i.value ?? i.primaryValue ?? 0)));
 
     return {
       data: [
@@ -347,10 +357,13 @@ export function generatePlotlyFigure(
 
   // 8. BOX PLOT
   if (type === 'box') {
+    const rawSamples = dataPayload.samples || dataPayload.values || [];
+    const samples = rawSamples.map(Number).filter((v: number) => !isNaN(v) && isFinite(v));
+
     return {
       data: [
         {
-          y: dataPayload.samples || [],
+          y: samples,
           type: 'box',
           name: dataPayload.metric || 'Distribution',
           boxpoints: 'outliers',
@@ -368,10 +381,13 @@ export function generatePlotlyFigure(
 
   // 9. HISTOGRAM
   if (type === 'histogram') {
+    const rawSamples = dataPayload.samples || dataPayload.values || [];
+    const samples = rawSamples.map(Number).filter((v: number) => !isNaN(v) && isFinite(v));
+
     return {
       data: [
         {
-          x: dataPayload.samples || [],
+          x: samples,
           type: 'histogram',
           marker: {
             color: '#6366F1',

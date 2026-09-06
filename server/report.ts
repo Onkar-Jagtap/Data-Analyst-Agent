@@ -226,6 +226,11 @@ export async function generateExecutiveReport(
     complianceNote: 'All computations verified deterministically in-memory. Zero customer rows transmitted to external servers. Privacy Shield fully engaged.',
   };
 
+  const rawCatCol = profile.columns.find(c => c.type === 'categorical')?.name || 'category';
+  const rawNumCol = profile.columns.find(c => c.type === 'numeric')?.name || 'revenue';
+  const sqlCatCol = rawCatCol.replace(/"/g, '""');
+  const sqlNumCol = rawNumCol.replace(/"/g, '""');
+
   // Reproducible Python & SQL
   const pythonScript = `# ====================================================================
 # EXECUTABLE DATA AUDIT & VERIFICATION SCRIPT
@@ -237,19 +242,29 @@ import pandas as pd
 import numpy as np
 
 # Load dataset
-df = pd.read_csv("${profile.filename.endsWith('.csv') ? profile.filename : profile.filename + '.csv'}")
+filename = "${profile.filename.endsWith('.csv') ? profile.filename : profile.filename + '.csv'}"
+df = pd.read_csv(filename)
 
 # 1. Executive Summary & Deterministic Totals
 print("--- EXECUTIVE TOTALS ---")
 print(f"Total Records: {len(df):,}")
 print(f"Columns: {list(df.columns)}")
 
+# Numeric coercion for formatted currencies, percentages, and commas
+for col in df.columns:
+    if df[col].dtype == 'object':
+        cleaned = pd.to_numeric(df[col].astype(str).str.replace(r'[$€£,%\\s]', '', regex=True), errors='coerce')
+        if cleaned.notnull().sum() > len(df) * 0.5:
+            df[col] = cleaned
+
 # Primary Metric Sum
 numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 if numeric_cols:
     primary_metric = numeric_cols[0]
-    print(f"Primary Metric ({primary_metric}) Sum: \${df[primary_metric].sum():,.2f}")
-    print(f"Primary Metric Mean: \${df[primary_metric].mean():,.2f}")
+    metric_sum = df[primary_metric].sum()
+    metric_mean = df[primary_metric].mean()
+    print(f"Primary Metric ({primary_metric}) Sum: {metric_sum:,.2f}")
+    print(f"Primary Metric ({primary_metric}) Mean: {metric_mean:,.2f}")
 
 # 2. Pareto 80/20 Concentration Check
 categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
@@ -280,10 +295,10 @@ WITH base_data AS (
 ),
 pareto_ranking AS (
     SELECT 
-        COALESCE(${profile.columns.find(c => c.type === 'categorical')?.name || 'category'}, 'Unknown') as segment_name,
+        COALESCE("${sqlCatCol}", 'Unknown') as segment_name,
         COUNT(*) as transaction_count,
-        SUM(${profile.columns.find(c => c.type === 'numeric')?.name || 'revenue'}) as total_volume,
-        ROUND(AVG(${profile.columns.find(c => c.type === 'numeric')?.name || 'revenue'}), 2) as avg_volume
+        SUM("${sqlNumCol}") as total_volume,
+        ROUND(AVG("${sqlNumCol}"), 2) as avg_volume
     FROM base_data
     GROUP BY 1
 )

@@ -473,9 +473,41 @@ export async function generateReproducibleCode(params: {
     return res.data.data;
   }
   const fName = params.filename || 'dataset.csv';
-  const py = `# Reproducible Python Code for ${fName}\nimport pandas as pd\ndf = pd.read_csv("${fName}")\nprint(df.groupby("${params.xAxis || 'category'}")["${params.yAxis || 'value'}"].${params.aggregation || 'sum'}())`;
-  const sql = `-- Reproducible SQL Query for ${fName}\nSELECT ${params.xAxis || 'category'}, ${params.aggregation?.toUpperCase() || 'SUM'}(${params.yAxis || 'value'}) AS aggregate_metric\nFROM dataset\nGROUP BY 1\nORDER BY 2 ${params.sortDirection?.toUpperCase() || 'DESC'}\nLIMIT ${params.limit || 20};`;
+  const xCol = (params.xAxis || 'category').replace(/"/g, '""');
+  const yCol = (params.yAxis || 'value').replace(/"/g, '""');
+  const pyAgg = params.aggregation === 'mean' || params.aggregation === 'avg' ? 'mean()' : `${params.aggregation || 'sum'}()`;
+  const sqlAgg = params.aggregation === 'mean' || params.aggregation === 'avg' ? 'AVG' : (params.aggregation?.toUpperCase() || 'SUM');
+  const py = `# Reproducible Python Code for ${fName}\nimport pandas as pd\ndf = pd.read_csv("${fName}")\nprint(df.groupby("${params.xAxis || 'category'}")["${params.yAxis || 'value'}"].${pyAgg})`;
+  const sql = `-- Reproducible SQL Query for ${fName}\nSELECT "${xCol}", ${sqlAgg}("${yCol}") AS aggregate_metric\nFROM dataset\nGROUP BY 1\nORDER BY 2 ${params.sortDirection?.toUpperCase() || 'DESC'}\nLIMIT ${params.limit || 20};`;
   return { python: py, sql };
+}
+
+export interface SqlExecutionResponse {
+  success: boolean;
+  columns: string[];
+  rows: Record<string, any>[];
+  totalCount: number;
+  executionTimeMs: number;
+  error?: string;
+}
+
+export async function executeSql(datasetId: string, query: string): Promise<SqlExecutionResponse> {
+  const res = await safeJsonFetch<SqlExecutionResponse>(`/api/sql/${datasetId}`, {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ query }),
+  });
+  if (res.ok && res.data) {
+    return res.data;
+  }
+  return {
+    success: false,
+    columns: [],
+    rows: [],
+    totalCount: 0,
+    executionTimeMs: 0,
+    error: res.errorMsg || 'Failed to execute SQL query on dataset.',
+  };
 }
 
 export async function exportFilteredSubset(

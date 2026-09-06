@@ -21,6 +21,7 @@ import {
   generateSchemaGroundedSuggestions,
   generateSuggestionsForDataset,
 } from '../server/suggestion_generator.js';
+import { executeSqlQuery } from '../server/sql_engine.js';
 
 interface TestResult {
   suite: string;
@@ -598,6 +599,102 @@ async function runAudit() {
     const json = await res.json();
     if (!json.success || !json.data?.markdown || !Array.isArray(json.data?.columns)) {
       throw new Error('Data dictionary API failed: ' + JSON.stringify(json));
+    }
+  });
+
+  await recordTest('API - POST /api/generate-code', 'Generates reproducible Python & SQL pipeline code', async () => {
+    const res = await fetch('http://localhost:3000/api/generate-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: 'sales_test.csv',
+        metric: 'Revenue',
+        xAxis: 'Region',
+        aggregation: 'sum',
+        limit: 10,
+      }),
+    });
+    const json = await res.json();
+    if (!json.success || !json.data?.python || !json.data?.sql) {
+      throw new Error('Generate code failed: ' + JSON.stringify(json));
+    }
+    if (!json.data.python.includes('import pandas as pd')) {
+      throw new Error('Python code does not import pandas');
+    }
+    if (!json.data.sql.includes('SELECT')) {
+      throw new Error('SQL code does not include SELECT');
+    }
+  });
+
+  await recordTest('API - POST /api/sql/:id', 'Executes arbitrary SQL query against active dataset', async () => {
+    const sampleId = 'sample-b2b-sales-sion';
+    const query = `SELECT "Region", COUNT(*) as total_count, ROUND(SUM("Revenue"), 2) as total_rev FROM dataset GROUP BY 1 ORDER BY 3 DESC LIMIT 5;`;
+    const res = await fetch(`http://localhost:3000/api/sql/${sampleId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    const json = await res.json();
+    if (!json.success || !Array.isArray(json.rows) || json.rows.length === 0) {
+      throw new Error('SQL execution API failed: ' + JSON.stringify(json));
+    }
+    if (!json.columns.includes('Region') || !json.columns.includes('total_rev')) {
+      throw new Error('SQL columns missing in output: ' + JSON.stringify(json.columns));
+    }
+    if (typeof json.executionTimeMs !== 'number') {
+      throw new Error('Missing executionTimeMs in SQL output');
+    }
+  });
+
+  // ============================================================================
+  // SQL IN-MEMORY EXECUTION ENGINE AUDIT
+  // ============================================================================
+  console.log('\n[SQL Engine Audit] Testing in-memory SQL execution, parsing, filtering, aggregation, and sorting');
+
+  recordTest('SQL Engine - Basic SELECT & WHERE Filter', 'Filters rows with comparison operators and returns correct columns', () => {
+    const sql = `SELECT "Region", "Revenue" FROM dataset WHERE "Revenue" > 5000 LIMIT 10;`;
+    const res = executeSqlQuery(sampleRows, sql);
+    if (!res.success) throw new Error('Query failed: ' + res.error);
+    if (res.columns.length !== 2 || res.columns[0] !== 'Region' || res.columns[1] !== 'Revenue') {
+      throw new Error('Columns mismatch: ' + JSON.stringify(res.columns));
+    }
+    for (const r of res.rows) {
+      if (Number(r.Revenue) <= 5000) {
+        throw new Error('Row violated WHERE condition: ' + JSON.stringify(r));
+      }
+    }
+  });
+
+  recordTest('SQL Engine - Aggregation with GROUP BY', 'Calculates SUM, AVG, and COUNT grouped by dimension', () => {
+    const sql = `SELECT "Region", COUNT(*) as cnt, SUM("Revenue") as total_rev, AVG("Profit") as avg_prof FROM dataset GROUP BY 1 ORDER BY total_rev DESC;`;
+    const res = executeSqlQuery(sampleRows, sql);
+    if (!res.success) throw new Error('Query failed: ' + res.error);
+    if (res.rows.length === 0) throw new Error('Expected grouped rows, got 0');
+    if (!res.columns.includes('total_rev') || !res.columns.includes('cnt')) {
+      throw new Error('Missing expected aggregated columns: ' + JSON.stringify(res.columns));
+    }
+    // Verify descending order
+    for (let i = 0; i < res.rows.length - 1; i++) {
+      if (res.rows[i].total_rev < res.rows[i + 1].total_rev) {
+        throw new Error('Rows not sorted in DESC order');
+      }
+    }
+  });
+
+  recordTest('SQL Engine - Dirty Currency & Nulls Tolerance', 'Parses currency strings and handles IS NULL gracefully in SQL', () => {
+    const dirtyData = [
+      { Category: 'Hardware', Cost: '$1,250.00', Notes: 'Complete' },
+      { Category: 'Software', Cost: '$4,500.50', Notes: null },
+      { Category: 'Cloud', Cost: '€800', Notes: 'Active' },
+      { Category: 'Support', Cost: null, Notes: 'Pending' },
+    ];
+    const sql = `SELECT "Category", SUM("Cost") as sum_cost FROM dataset WHERE "Cost" IS NOT NULL GROUP BY 1 ORDER BY sum_cost DESC;`;
+    const res = executeSqlQuery(dirtyData, sql);
+    if (!res.success) throw new Error('Query failed: ' + res.error);
+    if (res.rows.length !== 3) throw new Error(`Expected 3 rows after IS NOT NULL filter, got ${res.rows.length}`);
+    const softRow = res.rows.find(r => r.Category === 'Software');
+    if (!softRow || Math.abs(softRow.sum_cost - 4500.50) > 0.01) {
+      throw new Error(`Expected Software sum_cost to be 4500.50, got ${softRow?.sum_cost}`);
     }
   });
 
