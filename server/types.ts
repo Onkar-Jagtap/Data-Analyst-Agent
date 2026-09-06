@@ -398,6 +398,7 @@ export interface StrategicActionItem {
   expectedImpact: string;
   priority: 'Critical' | 'High' | 'Medium';
   responsibleRole: string;
+  status?: 'planned' | 'in_progress' | 'completed';
 }
 
 export interface ReportVisualSection {
@@ -437,6 +438,7 @@ export interface ExecutiveReport {
     trendValue?: string;
     status: 'good' | 'warning' | 'neutral' | 'danger';
   }[];
+  insights?: InsightItem[];
   visualSections: ReportVisualSection[];
   dataQualityHealth: {
     overallScore: number;
@@ -452,6 +454,123 @@ export interface ExecutiveReport {
     python: string;
     sql: string;
   };
+}
+
+export type DepartmentType = 'Leads' | 'Marketing' | 'Sales' | 'Operations' | 'Finance' | 'Executive' | 'General';
+
+export interface DepartmentDatasetSummary {
+  id: string;
+  filename: string;
+  department: DepartmentType;
+  rowCount: number;
+  columnCount: number;
+  keyColumns: string[];
+  healthScore: number;
+  detectedMetrics: {
+    name: string;
+    value: string | number;
+    description: string;
+  }[];
+}
+
+export interface DatasetRelationshipLink {
+  sourceDatasetId: string;
+  sourceDatasetName: string;
+  sourceDepartment: DepartmentType;
+  sourceKey: string;
+  targetDatasetId: string;
+  targetDatasetName: string;
+  targetDepartment: DepartmentType;
+  targetKey: string;
+  matchPercentage: number;
+  matchType: 'one-to-many' | 'one-to-one' | 'many-to-one';
+  joinStatus: 'healthy' | 'moderate_overlap' | 'low_overlap';
+}
+
+export interface CrossFunctionalKpi {
+  id: string;
+  title: string;
+  value: string | number;
+  benchmarkOrTarget?: string;
+  trend: 'positive' | 'negative' | 'neutral';
+  trendValue: string;
+  departmentsInvolved: DepartmentType[];
+  description: string;
+  formula: string;
+}
+
+export interface LeakageStep {
+  label: string;
+  amount: number;
+  percentageOfGross: number;
+  type: 'revenue' | 'reduction' | 'net';
+  department: DepartmentType;
+  description: string;
+}
+
+export interface StrategicImprovementAction {
+  id: string;
+  department: 'Executive' | 'Marketing' | 'Sales' | 'Operations' | 'Finance';
+  priority: 'Critical' | 'High' | 'Medium';
+  timeframe: 'Immediate 30-Day' | '60-90 Day' | 'Long-Term Strategic';
+  title: string;
+  finding: string;
+  rootCause: string;
+  concreteAction: string;
+  expectedFinancialImpact: string;
+  responsibleRole: string;
+  status: 'planned' | 'in_progress' | 'completed';
+}
+
+export interface CrossDepartmentRisk {
+  id: string;
+  title: string;
+  severity: 'Critical' | 'Warning' | 'Moderate';
+  departments: DepartmentType[];
+  metricImpact: string;
+  evidence: string;
+  recommendedIntervention: string;
+}
+
+export interface Company360Analysis {
+  generatedAt: string;
+  executiveHeadline: string;
+  overallHealthScore: number;
+  synthesisSummary: string;
+  macroContext: string;
+  datasets: DepartmentDatasetSummary[];
+  relationships: DatasetRelationshipLink[];
+  crossFunctionalKpis: CrossFunctionalKpi[];
+  leakageWaterfall: LeakageStep[];
+  strategicActions: StrategicImprovementAction[];
+  crossDepartmentRisks: CrossDepartmentRisk[];
+  unprofitableSegmentsOrSkus?: {
+    name: string;
+    category: string;
+    grossSales: number;
+    fulfillmentAndReturnCosts: number;
+    netMarginPct: number;
+    returnRate: number;
+    verdict: string;
+  }[];
+  marketingEfficiencyMatrix?: {
+    channel: string;
+    spend: number;
+    leads: number;
+    closedDeals: number;
+    revenue: number;
+    mer: number;
+    cac: number;
+    verdict: string;
+  }[];
+  fulfillmentSlaOverview?: {
+    carrier: string;
+    shipmentCount: number;
+    slaBreachRate: number;
+    returnRate: number;
+    avgDeliveryDays: number;
+    status: 'Healthy' | 'Needs Attention' | 'Severe Bottleneck';
+  }[];
 }
 
 

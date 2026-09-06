@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   BarChart3,
+  Building2,
   Calculator,
   ChevronLeft,
   ChevronRight,
@@ -53,6 +54,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Full Report',
       icon: <FileText className="w-4 h-4 text-emerald-400" />,
       badge: 'Strategy',
+    },
+    {
+      id: 'company360',
+      label: 'Company 360°',
+      icon: <Building2 className="w-4 h-4 text-blue-400" />,
+      badge: 'Multi-File',
     },
     {
       id: 'profile',

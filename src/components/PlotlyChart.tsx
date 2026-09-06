@@ -128,6 +128,32 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({ figure, className = 'w
 
     const layout = {
       autosize: true,
+      font: {
+        family: "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif",
+        size: 11,
+        color: '#94a3b8',
+        ...(figure.layout?.font || {}),
+      },
+      colorway: [
+        '#3b82f6', // Royal Blue
+        '#10b981', // Emerald
+        '#f59e0b', // Amber
+        '#8b5cf6', // Violet
+        '#ec4899', // Pink
+        '#06b6d4', // Cyan
+        '#f97316', // Orange
+        '#6366f1', // Indigo
+      ],
+      hoverlabel: {
+        bgcolor: '#0f172a',
+        bordercolor: '#334155',
+        font: {
+          family: "'Plus Jakarta Sans', sans-serif",
+          size: 12,
+          color: '#f8fafc',
+        },
+        ...(figure.layout?.hoverlabel || {}),
+      },
       margin: {
         l: 50,
         r: 30,
@@ -136,6 +162,8 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({ figure, className = 'w
         pad: 4,
         ...(figure.layout?.margin || {}),
       },
+      paper_bgcolor: figure.layout?.paper_bgcolor || 'transparent',
+      plot_bgcolor: figure.layout?.plot_bgcolor || 'transparent',
       ...figure.layout,
     };
 
@@ -146,7 +174,7 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({ figure, className = 'w
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
       toImageButtonOptions: {
         format: 'png',
-        filename: 'data_analyst_agent_chart',
+        filename: 'data_studio_chart',
         height: 600,
         width: 1000,
         scale: 2,

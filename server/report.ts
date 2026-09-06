@@ -18,7 +18,7 @@ import { generateWithGemini, getGeminiClient, getAiClient } from './gemini_clien
 export async function generateExecutiveReport(
   profile: DatasetProfile,
   rows: Record<string, any>[],
-  options?: { useAi?: boolean }
+  options?: { useAi?: boolean; directive?: string }
 ): Promise<ExecutiveReport> {
   const dashboard = computeDashboardData(rows, profile, {});
   const quality = auditDataQuality(rows, profile);
@@ -67,10 +67,15 @@ export async function generateExecutiveReport(
   // Build Executive Brief
   let executiveBrief = buildDeterministicExecutiveBrief(calcs, quality, profile, primaryDomain);
 
+  // If user provided a directive without AI, inject focus into deterministic brief
+  if (options?.directive) {
+    executiveBrief.overview = `${executiveBrief.overview} (Executive Directive Focus: ${options.directive})`;
+  }
+
   // Attempt AI narrative enrichment if key is present and enabled
   if (options?.useAi !== false && process.env.GEMINI_API_KEY) {
     try {
-      const enrichedBrief = await generateAiStrategicBrief(profile, calcs, quality, insights, primaryDomain);
+      const enrichedBrief = await generateAiStrategicBrief(profile, calcs, quality, insights, primaryDomain, options?.directive);
       if (enrichedBrief) {
         executiveBrief = enrichedBrief.brief;
         if (enrichedBrief.actionPlan && enrichedBrief.actionPlan.length > 0) {
@@ -306,6 +311,7 @@ ORDER BY total_volume DESC;
     executiveBrief,
     businessEconomics: calcs,
     kpis,
+    insights,
     visualSections,
     dataQualityHealth,
     actionPlan,
@@ -529,24 +535,28 @@ async function generateAiStrategicBrief(
   calcs: BusinessCalculations,
   quality: DataQualityAudit,
   insights: any[],
-  domain: string
+  domain: string,
+  directive?: string
 ) {
   const client = getAiClient();
   if (!client) return null;
 
-  // STRICT PRIVACY SHIELD: NEVER send raw records. Only send aggregated stats and schema.
-  const schemaSummary = profile.columns.map(c => ({
-    name: c.name,
-    type: c.type,
-    nullPct: c.nullPercentage,
-  }));
+  let directiveInstruction = '';
+  if (directive && directive.trim()) {
+    directiveInstruction = `
+USER STRATEGIC DIRECTIVE & EXPLICIT CUSTOMIZATION REQUEST:
+"${directive.trim()}"
+
+CRITICAL REQUIREMENT: The user has explicitly provided the strategic directive above. You MUST tailor the headline, executive overview, macro context, strengths, risks, and especially the actionPlan to directly fulfill, prioritize, and address this directive, while remaining completely truthful to the audited business metrics below.
+`;
+  }
 
   const prompt = `You are a Chief Financial & Strategy Officer providing an executive briefing and tactical strategic action plan for business leadership based on audited data.
 
 DOMAIN: ${domain}
 DATASET NAME: ${profile.filename}
 SCALE: ${profile.rowCount} records, ${profile.columnCount} columns
-
+${directiveInstruction}
 AUDITED BUSINESS METRICS (DO NOT INVENT NUMBERS, USE THESE EXACT ONES):
 - Gross Revenue / Volume: ${calcs.totalRevenueFormatted}
 - Net Profit: ${calcs.totalProfitFormatted}
@@ -649,5 +659,65 @@ Return a valid JSON object ONLY (no markdown fences, no raw text around it) with
       aiGenerated: true,
     },
     actionPlan: Array.isArray(parsed.actionPlan) ? parsed.actionPlan : undefined,
+  };
+}
+
+/**
+ * Refines a specific section of the executive report based on explicit user instructions.
+ */
+export async function refineReportSection(params: {
+  section: 'headline' | 'overview' | 'macroContext' | 'strengths' | 'risks' | 'actionPlan' | 'singleAction';
+  instruction: string;
+  currentContent: any;
+  datasetName: string;
+  domain: string;
+  calcs: BusinessCalculations;
+}): Promise<{ refinedContent: any }> {
+  const client = getAiClient();
+  if (!client) {
+    throw new Error('Gemini API is not configured on server.');
+  }
+
+  const { section, instruction, currentContent, datasetName, domain, calcs } = params;
+
+  const prompt = `You are a Chief Financial & Strategy Officer assisting an executive in refining a specific section of an audited corporate report.
+
+DATASET: ${datasetName}
+DOMAIN: ${domain}
+CORE METRICS:
+- Total Volume: ${calcs.totalRevenueFormatted}
+- Net Profit: ${calcs.totalProfitFormatted} (Margin: ${calcs.profitMarginFormatted})
+- AOV: ${calcs.averageOrderValueFormatted}
+- Anchor Segment: ${calcs.topSegmentName} (${calcs.topSegmentShareFormatted})
+- Pareto Top 20%: ${calcs.paretoTop20ShareFormatted}
+
+TARGET SECTION TO REFINE: "${section}"
+CURRENT CONTENT:
+${JSON.stringify(currentContent, null, 2)}
+
+USER REFINEMENT INSTRUCTION:
+"${instruction}"
+
+INSTRUCTIONS:
+Refine or rewrite the content for "${section}" strictly according to the user instruction while remaining truthful to the financial metrics.
+Return a valid JSON object ONLY with the key "refinedContent".
+Format based on section:
+- If headline, macroContext, or overview: "refinedContent": "string"
+- If strengths or risks: "refinedContent": ["bullet 1", "bullet 2", ...]
+- If singleAction: "refinedContent": { "id": "...", "category": "...", "title": "...", "action": "...", "expectedImpact": "...", "priority": "...", "responsibleRole": "..." }
+- If actionPlan: "refinedContent": [ { ...action items... } ]`;
+
+  const response = await generateWithGemini({
+    preferredModel: 'gemini-3.6-flash',
+    contents: prompt,
+    config: {
+      temperature: 0.3,
+      responseMimeType: 'application/json',
+    },
+  }, client);
+
+  const parsed = JSON.parse(response.text || '{}');
+  return {
+    refinedContent: parsed.refinedContent !== undefined ? parsed.refinedContent : parsed,
   };
 }

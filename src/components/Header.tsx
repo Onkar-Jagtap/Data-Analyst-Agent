@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   BarChart2,
+  Building2,
   ChevronDown,
   Download,
   FileSpreadsheet,
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react';
 import { StudioLogo } from './StudioLogo.js';
 import { DatasetListItem, DatasetProfile } from '../types.js';
+import { downloadDatasetCsv } from '../utils/exportCsv.js';
 
 interface HeaderProps {
   currentProfile: DatasetProfile | null;
@@ -23,6 +25,7 @@ interface HeaderProps {
   onQuickAsk: (question: string) => void;
   qualityScore?: number;
   loading?: boolean;
+  onOpenCompany360?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -34,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
   onQuickAsk,
   qualityScore,
   loading = false,
+  onOpenCompany360,
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [quickInput, setQuickInput] = useState('');
@@ -46,9 +50,13 @@ export const Header: React.FC<HeaderProps> = ({
     }
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!currentProfile) return;
-    window.location.href = `/api/export/${currentProfile.id}`;
+    try {
+      await downloadDatasetCsv(currentProfile.id, currentProfile.filename);
+    } catch (err) {
+      console.error('Failed to export dataset CSV:', err);
+    }
   };
 
   return (
@@ -122,16 +130,33 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 ))}
               </div>
-              <div className="pt-1.5 mt-1 border-t border-slate-800">
+              <div className="pt-1.5 mt-1 border-t border-slate-800 space-y-1">
+                {onOpenCompany360 && (
+                  <button
+                    onClick={() => {
+                      setDropdownOpen(false);
+                      onOpenCompany360();
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-blue-300 bg-blue-950/40 hover:bg-blue-900/50 border border-blue-800/40 flex items-center justify-between font-semibold transition-colors"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <Building2 className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Enterprise 360° Model</span>
+                    </div>
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-blue-900/70 text-blue-200 border border-blue-700/50">
+                      Multi-File
+                    </span>
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setDropdownOpen(false);
                     onOpenUpload();
                   }}
-                  className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-blue-400 hover:bg-blue-950/40 flex items-center gap-1.5 font-medium"
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:bg-slate-800/80 flex items-center gap-1.5 font-medium"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  Upload new file...
+                  <Plus className="w-3.5 h-3.5 text-blue-400" />
+                  Upload new file(s)...
                 </button>
               </div>
             </div>
@@ -178,6 +203,17 @@ export const Header: React.FC<HeaderProps> = ({
           <RefreshCw className={`w-3.5 h-3.5 text-slate-400 ${loading ? 'animate-spin' : ''}`} />
           <span className="hidden sm:inline">Try Sample</span>
         </button>
+
+        {onOpenCompany360 && (
+          <button
+            onClick={onOpenCompany360}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-950/60 hover:bg-blue-900/70 border border-blue-800/60 text-xs font-semibold text-blue-300 transition-colors shadow-sm"
+            title="Open Cross-Department Enterprise 360° Intelligence View"
+          >
+            <Building2 className="w-3.5 h-3.5 text-blue-400" />
+            <span className="hidden md:inline">Company 360°</span>
+          </button>
+        )}
 
         <button
           onClick={onOpenUpload}

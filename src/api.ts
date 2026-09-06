@@ -3,6 +3,7 @@ import {
   AnalysisResult,
   AssertionEvaluationResult,
   BusinessAssertion,
+  Company360Analysis,
   CorrelationMatrixResult,
   DashboardData,
   DataQualityAudit,
@@ -128,6 +129,107 @@ export async function loadSampleDataset(): Promise<{ profile: DatasetProfile; qu
   }
   // Autonomous browser engine generation
   return clientEngine.initSampleDataset();
+}
+
+export async function loadEnterpriseCompanySuite(): Promise<{ datasets: DatasetListItem[]; activeId?: string }> {
+  const res = await safeJsonFetch<{
+    success: boolean;
+    data: { datasets: DatasetListItem[]; activeDatasetId?: string };
+  }>('/api/sample-company-suite', {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  if (res.ok && res.data && res.data.success && res.data.data) {
+    try {
+      clientEngine.initEnterpriseCompanySuite();
+    } catch {}
+    return {
+      datasets: res.data.data.datasets,
+      activeId: res.data.data.activeDatasetId,
+    };
+  }
+  const fallback = clientEngine.initEnterpriseCompanySuite();
+  return {
+    datasets: fallback.datasets.map(d => ({
+      id: d.id,
+      filename: d.filename,
+      rowCount: d.rowCount,
+      columnCount: d.columnCount,
+      isSample: false,
+      createdAt: new Date().toISOString(),
+    })),
+    activeId: fallback.activeId,
+  };
+}
+
+export async function uploadBatchDatasets(files: File[]): Promise<{ uploadedCount: number; datasets: any[]; activeId?: string }> {
+  const formData = new FormData();
+  files.forEach(f => formData.append('files', f));
+
+  const res = await safeJsonFetch<{
+    success: boolean;
+    data: { uploadedCount: number; datasets: any[]; activeDatasetId?: string };
+  }>('/api/upload-batch', {
+    method: 'POST',
+    headers: { 'x-session-id': getClientSessionId() },
+    body: formData,
+  });
+
+  if (res.ok && res.data && res.data.success && res.data.data) {
+    for (const file of files) {
+      try {
+        clientEngine.uploadDataset(file).catch(() => {});
+      } catch {}
+    }
+    return {
+      uploadedCount: res.data.data.uploadedCount,
+      datasets: res.data.data.datasets,
+      activeId: res.data.data.activeDatasetId,
+    };
+  }
+
+  // Client-side fallback
+  const processed = [];
+  for (const f of files) {
+    const r = await clientEngine.uploadDataset(f);
+    processed.push({
+      id: r.profile.id,
+      filename: r.profile.filename,
+      rowCount: r.profile.rowCount,
+      columnCount: r.profile.columnCount,
+    });
+  }
+  return {
+    uploadedCount: processed.length,
+    datasets: processed,
+    activeId: processed[0]?.id,
+  };
+}
+
+export async function fetchCompany360Analysis(directive?: string): Promise<Company360Analysis> {
+  const q = directive ? `?directive=${encodeURIComponent(directive)}` : '';
+  const res = await safeJsonFetch<{ success: boolean; data: Company360Analysis }>(`/api/company-360${q}`, {
+    headers: getHeaders(),
+  });
+  if (res.ok && res.data && res.data.success && res.data.data) {
+    return res.data.data;
+  }
+  return clientEngine.getCompany360Analysis(directive);
+}
+
+export async function refineCompany360Analysis(directive: string): Promise<Company360Analysis> {
+  const res = await safeJsonFetch<{ success: boolean; data: Company360Analysis }>('/api/company-360/refine', {
+    method: 'POST',
+    headers: {
+      ...getHeaders(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ directive }),
+  });
+  if (res.ok && res.data && res.data.success && res.data.data) {
+    return res.data.data;
+  }
+  return clientEngine.getCompany360Analysis(directive);
 }
 
 export async function uploadDataset(file: File): Promise<{ datasetId: string; profile: DatasetProfile; quality: DataQualityAudit; insights: InsightItem[] }> {
@@ -488,16 +590,35 @@ export async function fetchDataDictionary(
   };
 }
 
-export async function fetchExecutiveReport(datasetId: string, useAi = true): Promise<ExecutiveReport> {
+export async function fetchExecutiveReport(datasetId: string, useAi = true, directive?: string): Promise<ExecutiveReport> {
   const res = await safeJsonFetch<{ success: boolean; data: ExecutiveReport }>(`/api/report/${datasetId}`, {
     method: 'POST',
     headers: getHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ useAi }),
+    body: JSON.stringify({ useAi, directive }),
   });
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.getExecutiveReport(datasetId);
+  return clientEngine.getExecutiveReport(datasetId, directive);
+}
+
+export async function refineReportSection(
+  datasetId: string,
+  params: {
+    section: 'headline' | 'overview' | 'macroContext' | 'strengths' | 'risks' | 'actionPlan' | 'singleAction';
+    instruction: string;
+    currentContent: any;
+  }
+): Promise<any> {
+  const res = await safeJsonFetch<{ success: boolean; data: any }>(`/api/report/${datasetId}/refine-section`, {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(params),
+  });
+  if (res.ok && res.data && res.data.success && res.data.data !== undefined) {
+    return res.data.data;
+  }
+  return null;
 }
 
 export {

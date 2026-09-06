@@ -2,7 +2,7 @@ import { DataQualityAudit, DatasetProfile, InsightItem } from './types.js';
 import { profileDataset } from './profiler.js';
 import { auditDataQuality } from './quality.js';
 import { generateAutomatedInsights } from './insights.js';
-import { generateSampleBusinessDataset } from './sample_data.js';
+import { generateSampleBusinessDataset, generateEnterpriseMultiDepartmentSuite } from './sample_data.js';
 
 export interface StoredDataset {
   id: string;
@@ -171,6 +171,47 @@ class MultiSessionDatasetStore {
       isSample: d.isSample,
       createdAt: d.createdAt,
     }));
+  }
+
+  public getAllDatasets(sessionId: string): StoredDataset[] {
+    const session = this.getSession(sessionId);
+    if (session.datasets.size === 0) {
+      this.initSample(sessionId);
+    }
+    return Array.from(session.datasets.values());
+  }
+
+  public initEnterpriseCompanySuite(sessionId: string): StoredDataset[] {
+    const session = this.getSession(sessionId);
+    const suite = generateEnterpriseMultiDepartmentSuite();
+    const created: StoredDataset[] = [];
+
+    const datasetsToCreate = [
+      { filename: 'leads.csv', rows: suite.leads },
+      { filename: 'marketing.csv', rows: suite.marketing },
+      { filename: 'sales.csv', rows: suite.sales },
+      { filename: 'operations.csv', rows: suite.operations },
+      { filename: 'finance.csv', rows: suite.finance },
+    ];
+
+    for (const item of datasetsToCreate) {
+      // Check if dataset already exists in session with this filename, or add it
+      const existing = Array.from(session.datasets.values()).find(d => d.filename === item.filename);
+      if (existing) {
+        created.push(existing);
+      } else {
+        const stored = this.addDataset(sessionId, item.filename, item.rows);
+        created.push(stored);
+      }
+    }
+
+    // Set sales or first dataset as active
+    const salesDs = created.find(d => d.filename.includes('sales')) || created[0];
+    if (salesDs) {
+      session.activeDatasetId = salesDs.id;
+    }
+
+    return created;
   }
 
   public saveSnapshotForUndo(sessionId: string, datasetId: string, currentRows: Record<string, any>[]): void {

@@ -18,7 +18,8 @@ import { performTransformation } from './transformer.js';
 import { evaluateBusinessAssertions } from './quality.js';
 import { isNullOrEmpty, parseCleanNumber, profileDataset } from './profiler.js';
 import { computeDashboardData } from './dashboard.js';
-import { generateExecutiveReport } from './report.js';
+import { generateExecutiveReport, refineReportSection } from './report.js';
+import { analyzeEnterpriseDatasets } from './company_360.js';
 import {
   generateSuggestionsForDataset,
   generateSchemaGroundedSuggestions,
@@ -118,6 +119,24 @@ app.post('/api/sample', (req, res) => {
   });
 });
 
+// Load / Reset Enterprise 5-Department Suite (Leads, Marketing, Sales, Operations, Finance)
+app.post('/api/sample-company-suite', (req, res) => {
+  const sid = getSessionId(req);
+  const created = datasetStore.initEnterpriseCompanySuite(sid);
+  res.json({
+    success: true,
+    data: {
+      datasets: created.map(d => ({
+        id: d.id,
+        filename: d.filename,
+        rowCount: d.profile.rowCount,
+        columnCount: d.profile.columnCount,
+      })),
+      activeDatasetId: datasetStore.getActiveDataset(sid)?.id,
+    },
+  });
+});
+
 // Upload CSV or Excel file (session-isolated & sanitized)
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   const sid = getSessionId(req);
@@ -177,6 +196,98 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     res.status(500).json({
       success: false,
       error: { message: err.message || 'An error occurred during dataset processing.' },
+    });
+  }
+});
+
+// Batch Upload multiple Departmental CSVs or Excels at once
+app.post('/api/upload-batch', upload.array('files', 10), async (req, res) => {
+  const sid = getSessionId(req);
+  try {
+    const files = req.files as Express.Multer.File[];
+    if (!files || files.length === 0) {
+      return res.status(400).json({ success: false, error: { message: 'No files were uploaded.' } });
+    }
+
+    const processedDatasets: { id: string; filename: string; rowCount: number; columnCount: number }[] = [];
+
+    for (const f of files) {
+      const filename = sanitizeFilename(f.originalname);
+      const ext = path.extname(filename).toLowerCase();
+      let rows: Record<string, any>[] = [];
+
+      if (ext === '.csv') {
+        const csvContent = f.buffer.toString('utf8');
+        const parsed = Papa.parse(csvContent, { header: true, dynamicTyping: false, skipEmptyLines: 'greedy' });
+        if (parsed.data && parsed.data.length > 0) {
+          rows = parsed.data as Record<string, any>[];
+        }
+      } else if (ext === '.xlsx' || ext === '.xls') {
+        const workbook = XLSX.read(f.buffer, { type: 'buffer' });
+        const firstSheetName = workbook.SheetNames[0];
+        if (firstSheetName) {
+          rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheetName], { defval: null }) as Record<string, any>[];
+        }
+      }
+
+      if (rows.length > 0) {
+        const stored = datasetStore.addDataset(sid, filename, rows);
+        processedDatasets.push({
+          id: stored.id,
+          filename: stored.filename,
+          rowCount: stored.profile.rowCount,
+          columnCount: stored.profile.columnCount,
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        uploadedCount: processedDatasets.length,
+        datasets: processedDatasets,
+        activeDatasetId: datasetStore.getActiveDataset(sid)?.id,
+      },
+    });
+  } catch (err: any) {
+    console.error('Batch upload error:', err);
+    res.status(500).json({
+      success: false,
+      error: { message: err.message || 'An error occurred during batch dataset processing.' },
+    });
+  }
+});
+
+// Company 360° Multi-Dataset Cross-Functional Analysis
+app.get('/api/company-360', async (req, res) => {
+  const sid = getSessionId(req);
+  try {
+    const allDatasets = datasetStore.getAllDatasets(sid);
+    const directive = typeof req.query.directive === 'string' ? req.query.directive : undefined;
+    const analysis = await analyzeEnterpriseDatasets(allDatasets, directive);
+    res.json({ success: true, data: analysis });
+  } catch (err: any) {
+    console.error('Company 360 analysis error:', err);
+    res.status(500).json({
+      success: false,
+      error: { message: err.message || 'Failed to generate cross-dataset analysis.' },
+    });
+  }
+});
+
+// Company 360° Directive Refinement (AI / Strategic simulation)
+app.post('/api/company-360/refine', async (req, res) => {
+  const sid = getSessionId(req);
+  try {
+    const directive = req.body?.directive;
+    const allDatasets = datasetStore.getAllDatasets(sid);
+    const analysis = await analyzeEnterpriseDatasets(allDatasets, directive);
+    res.json({ success: true, data: analysis });
+  } catch (err: any) {
+    console.error('Company 360 refinement error:', err);
+    res.status(500).json({
+      success: false,
+      error: { message: err.message || 'Failed to refine cross-dataset analysis.' },
     });
   }
 });
@@ -304,13 +415,83 @@ app.post('/api/report/:id', async (req, res) => {
     return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
   }
 
-  const { useAi } = req.body || {};
+  const { useAi, directive } = req.body || {};
   try {
-    const report = await generateExecutiveReport(dataset.profile, dataset.rawRows, { useAi: useAi !== false });
+    const report = await generateExecutiveReport(dataset.profile, dataset.rawRows, {
+      useAi: useAi !== false,
+      directive,
+    });
     res.json({ success: true, data: report });
   } catch (err: any) {
     console.error('Error generating executive report:', err);
     res.status(500).json({ success: false, error: { message: err.message || 'Failed to generate executive report.' } });
+  }
+});
+
+// Targeted Section AI Refinement Endpoint
+app.post('/api/report/:id/refine-section', async (req, res) => {
+  const sid = getSessionId(req);
+  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  if (!dataset) {
+    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+  }
+
+  const { section, instruction, currentContent } = req.body || {};
+  if (!section || !instruction) {
+    return res.status(400).json({ success: false, error: { message: 'section and instruction are required.' } });
+  }
+
+  try {
+    const dashboard = computeDashboardData(dataset.rawRows, dataset.profile, {});
+    const calcs = dashboard.businessCalculations || {
+      totalRevenue: 0,
+      totalRevenueFormatted: '$0',
+      totalProfit: 0,
+      totalProfitFormatted: '$0',
+      profitMarginPct: 0,
+      profitMarginFormatted: '0.0%',
+      averageOrderValue: 0,
+      averageOrderValueFormatted: '$0',
+      topSegmentName: 'N/A',
+      topSegmentRevenue: 0,
+      topSegmentSharePct: 0,
+      topSegmentShareFormatted: '0.0%',
+      paretoTop20SharePct: 0,
+      paretoTop20ShareFormatted: '0.0%',
+      periodGrowthPct: null,
+      periodGrowthFormatted: 'N/A',
+      refundAdjustmentCount: 0,
+      refundAdjustmentTotal: 0,
+      refundAdjustmentFormatted: '$0',
+      efficiencyRatio: 0,
+      efficiencyRatioFormatted: '0.00x',
+    };
+
+    const colNamesLower = dataset.profile.columns.map(c => c.name.toLowerCase()).join(' ');
+    let primaryDomain = 'General Enterprise Operations';
+    if (colNamesLower.includes('revenue') || colNamesLower.includes('sale') || colNamesLower.includes('order')) {
+      primaryDomain = 'B2B / Commerce & Commercial Sales';
+    } else if (colNamesLower.includes('cost') || colNamesLower.includes('budget') || colNamesLower.includes('financial')) {
+      primaryDomain = 'Corporate Finance & Treasury';
+    } else if (colNamesLower.includes('ship') || colNamesLower.includes('inventory') || colNamesLower.includes('warehouse')) {
+      primaryDomain = 'Supply Chain & Logistics';
+    } else if (colNamesLower.includes('employee') || colNamesLower.includes('salary') || colNamesLower.includes('department')) {
+      primaryDomain = 'Human Capital & Workforce Operations';
+    }
+
+    const result = await refineReportSection({
+      section,
+      instruction,
+      currentContent,
+      datasetName: dataset.filename,
+      domain: primaryDomain,
+      calcs,
+    });
+
+    res.json({ success: true, data: result.refinedContent });
+  } catch (err: any) {
+    console.error('Error refining report section:', err);
+    res.status(500).json({ success: false, error: { message: err.message || 'Failed to refine section with AI.' } });
   }
 });
 

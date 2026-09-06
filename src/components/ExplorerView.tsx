@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { DatasetProfile } from '../types.js';
 import { fetchExplorerData } from '../api.js';
+import { downloadDatasetCsv } from '../utils/exportCsv.js';
 
 interface ExplorerViewProps {
   profile: DatasetProfile;
@@ -93,14 +94,14 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({ profile }) => {
         </div>
 
         <div className="flex items-center gap-2">
-          <a
-            href={`/api/export/${profile.id}`}
-            download
-            className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-medium text-slate-300 flex items-center gap-1.5 transition-colors"
+          <button
+            onClick={() => downloadDatasetCsv(profile.id, profile.filename)}
+            className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-medium text-slate-300 flex items-center gap-1.5 transition-colors shadow-sm"
+            title="Download full audited dataset as CSV"
           >
             <Download className="w-3.5 h-3.5" />
             <span>Export CSV</span>
-          </a>
+          </button>
         </div>
       </div>
 

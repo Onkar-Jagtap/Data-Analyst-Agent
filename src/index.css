@@ -71,3 +71,39 @@ select:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
 }
+
+/* Print Stylesheet for Flawless PDF & Paper Printing */
+@media print {
+  html, body {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 11pt !important;
+  }
+
+  header, aside, .no-print, button, [role="tablist"] {
+    display: none !important;
+  }
+
+  main {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* Prevent awkward mid-element page breaks */
+  h1, h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  table, figure, [data-printable-section="true"] {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Expand charts and tables to full printable width */
+  .plotly-graph-div {
+    width: 100% !important;
+  }
+}
+

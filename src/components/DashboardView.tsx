@@ -553,7 +553,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </h2>
           </div>
           <button
-            onClick={() => onNavigateTab('visual_studio')}
+            onClick={() => onNavigateTab('studio')}
             className="text-xs text-blue-400 hover:text-blue-300 font-semibold"
           >
             + Create New in Studio

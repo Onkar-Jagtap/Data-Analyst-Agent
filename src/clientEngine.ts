@@ -1,6 +1,7 @@
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { generateSampleBusinessDataset } from '../server/sample_data.js';
+import { generateSampleBusinessDataset, generateEnterpriseMultiDepartmentSuite } from '../server/sample_data.js';
+import { analyzeEnterpriseDatasets } from '../server/company_360.js';
 import {
   profileDataset,
   parseCleanNumber,
@@ -27,6 +28,7 @@ import { AnalysisPlan } from '../server/types.js';
 import {
   AnalysisResult,
   BusinessAssertion,
+  Company360Analysis,
   DataQualityAudit,
   DatasetProfile,
   ExecutiveReport,
@@ -160,6 +162,74 @@ class ClientAnalyticsEngine {
     this.undoHistory.set(id, []);
 
     return { profile, quality, insights };
+  }
+
+  public initEnterpriseCompanySuite(): {
+    datasets: { id: string; filename: string; rowCount: number; columnCount: number }[];
+    activeId: string;
+  } {
+    const suite = generateEnterpriseMultiDepartmentSuite();
+    const items = [
+      { filename: 'leads.csv', rows: suite.leads },
+      { filename: 'marketing.csv', rows: suite.marketing },
+      { filename: 'sales.csv', rows: suite.sales },
+      { filename: 'operations.csv', rows: suite.operations },
+      { filename: 'finance.csv', rows: suite.finance },
+    ];
+
+    for (const item of items) {
+      const existing = Array.from(this.datasets.values()).find(d => d.filename === item.filename);
+      if (!existing) {
+        const id = `enterprise-${item.filename.replace('.csv', '')}-${Date.now()}`;
+        const profile = profileDataset(item.rows, item.filename, id) as DatasetProfile;
+        const qualityAudit = auditDataQuality(item.rows, profile) as DataQualityAudit;
+        const insights = generateAutomatedInsights(item.rows, profile) as InsightItem[];
+
+        const stored: ClientStoredDataset = {
+          id,
+          filename: item.filename,
+          rawRows: item.rows,
+          profile,
+          qualityAudit,
+          insights,
+          isSample: false,
+          createdAt: new Date().toISOString(),
+        };
+
+        this.datasets.set(id, stored);
+        this.undoHistory.set(id, []);
+      }
+    }
+
+    const salesDs = Array.from(this.datasets.values()).find(d => d.filename.includes('sales')) || Array.from(this.datasets.values())[0];
+    if (salesDs) this.activeDatasetId = salesDs.id;
+
+    return {
+      datasets: Array.from(this.datasets.values()).map(d => ({
+        id: d.id,
+        filename: d.filename,
+        rowCount: d.profile.rowCount,
+        columnCount: d.profile.columnCount,
+      })),
+      activeId: this.activeDatasetId || '',
+    };
+  }
+
+  public async getCompany360Analysis(directive?: string): Promise<Company360Analysis> {
+    if (this.datasets.size === 0) {
+      this.initEnterpriseCompanySuite();
+    }
+    const all = Array.from(this.datasets.values()).map(d => ({
+      id: d.id,
+      filename: d.filename,
+      rawRows: d.rawRows,
+      profile: d.profile,
+      qualityAudit: d.qualityAudit,
+      insights: d.insights,
+      isSample: d.isSample,
+      createdAt: d.createdAt,
+    }));
+    return analyzeEnterpriseDatasets(all as any, directive);
   }
 
   public syncFromSample(
@@ -570,7 +640,7 @@ class ClientAnalyticsEngine {
     return { columns, markdown, profile: ds.profile };
   }
 
-  public getExecutiveReport(datasetId?: string): ExecutiveReport {
+  public getExecutiveReport(datasetId?: string, directive?: string): ExecutiveReport {
     const ds = this.getDataset(datasetId);
     if (!ds) throw new Error('Dataset not found in client storage.');
 
@@ -705,27 +775,68 @@ class ClientAnalyticsEngine {
         category: 'Immediate 30-Day',
         title: `Capitalize on Anchor Segment Leadership ('${calcs.topSegmentName}')`,
         action: `Establish dedicated executive account management and loyalty agreements for top accounts in '${calcs.topSegmentName}', which drives ${calcs.topSegmentShareFormatted} of corporate volume.`,
-        expectedImpact: `Protects baseline operating volume and establishes a reliable foundation for expansion.`,
+        expectedImpact: `Protects baseline operating volume and establishes a reliable foundation for targeted expansion.`,
         priority: 'High',
         responsibleRole: 'VP of Commercial Sales / Operations',
+        status: 'in_progress',
       },
       {
         id: 'act-2',
-        category: '60-90 Day Optimization',
-        title: 'Value-Based Pricing & Margin Optimization',
-        action: `Audit unit economics across secondary tiers to lift blended profit margin from ${calcs.profitMarginFormatted} toward target benchmark of 25%+.`,
-        expectedImpact: 'Unlocks an estimated +200-400 bps in operating contribution on existing volume.',
-        priority: 'High',
-        responsibleRole: 'Chief Revenue Officer / Finance Lead',
+        category: 'Immediate 30-Day',
+        title: profile.duplicateRowCount > 0
+          ? 'Purge Duplicate Records & Enforce Ingest Uniqueness'
+          : calcs.refundAdjustmentCount > 0
+          ? 'Triage Negative Adjustments & Reversal Anomalies'
+          : 'Establish Real-Time Performance Alerting',
+        action: profile.duplicateRowCount > 0
+          ? `Purge ${profile.duplicateRowCount} duplicate transactions via the Data Cleaning Assistant and enforce strict primary key uniqueness constraints.`
+          : calcs.refundAdjustmentCount > 0
+          ? `Perform root-cause post-mortem on ${calcs.refundAdjustmentCount} transactions with negative values totaling ${calcs.refundAdjustmentFormatted}.`
+          : `Deploy automated threshold alerts for margin drops and volume anomalies exceeding 1.5 standard deviations.`,
+        expectedImpact: 'Eliminates revenue reporting discrepancies and preserves clean accounting audit trails.',
+        priority: profile.duplicateRowCount > 0 || calcs.refundAdjustmentCount > 0 ? 'Critical' : 'High',
+        responsibleRole: 'Data Engineering & QA Team',
+        status: 'planned',
       },
       {
         id: 'act-3',
+        category: '60-90 Day Optimization',
+        title: 'Value-Based Pricing & AOV Tier Expansion',
+        action: `Audit unit economics across secondary tiers to lift blended profit margin from ${calcs.profitMarginFormatted} toward target benchmark of 25%+ and increase Average Order Value (${calcs.averageOrderValueFormatted}) by 10-15%.`,
+        expectedImpact: 'Unlocks an estimated +200-400 bps in operating contribution on existing transaction volume.',
+        priority: 'High',
+        responsibleRole: 'Chief Revenue Officer / Pricing Committee',
+        status: 'planned',
+      },
+      {
+        id: 'act-4',
+        category: '60-90 Day Optimization',
+        title: 'Expand Mid-Tier Growth Acceleration Initiative',
+        action: `Identify secondary categories directly below '${calcs.topSegmentName}' and deploy targeted marketing incentives to accelerate their transition into high-velocity tiers.`,
+        expectedImpact: 'Builds secondary revenue pillars and diminishes over-reliance on a single category.',
+        priority: 'Medium',
+        responsibleRole: 'Head of Growth Marketing',
+        status: 'planned',
+      },
+      {
+        id: 'act-5',
         category: 'Governance & Data Quality',
-        title: 'Automate Data Quality Validation Protocols',
+        title: 'Automate Data Quality & Schema Validation Protocols',
         action: `Maintain automated validation pipelines to preserve current completeness score of ${quality.score}/100 and eliminate missing attribute values.`,
-        expectedImpact: 'Guarantees audit-grade reporting fidelity and prevents data leakage.',
+        expectedImpact: 'Guarantees audit-grade reporting fidelity and prevents data leakage across analytical feeds.',
         priority: quality.score < 80 ? 'Critical' : 'Medium',
         responsibleRole: 'Head of Data Engineering & Analytics',
+        status: 'planned',
+      },
+      {
+        id: 'act-6',
+        category: 'Risk & Sensitivity',
+        title: 'Concentration Risk & Revenue Hedging Strategy',
+        action: `Develop cross-tier diversification programs to reduce dependence on top 20% contributors, who currently drive ${calcs.paretoTop20ShareFormatted} of total recorded volume.`,
+        expectedImpact: 'Lowers operational volatility and protects company performance against single-category demand shocks.',
+        priority: calcs.paretoTop20SharePct > 70 ? 'Critical' : 'High',
+        responsibleRole: 'Chief Strategy Officer / Risk Committee',
+        status: 'planned',
       },
     ];
 
@@ -749,6 +860,11 @@ class ClientAnalyticsEngine {
       aiGenerated: false,
     };
 
+    if (directive && directive.trim()) {
+      executiveBrief.headline = `Strategic Directive Briefing: ${directive.trim()}`;
+      executiveBrief.overview = `${executiveBrief.overview} (Directive Applied: "${directive.trim()}")`;
+    }
+
     const dataQualityHealth = {
       overallScore: quality.score,
       status: quality.score >= 80 ? ('Excellent' as const) : quality.score >= 60 ? ('Good' as const) : ('Needs Attention' as const),
@@ -761,6 +877,8 @@ class ClientAnalyticsEngine {
 
     const pythonScript = `# Autonomous Audit Script for ${profile.filename}\nimport pandas as pd\ndf = pd.read_csv("${profile.filename}")\nprint(df.info())\nprint(df.describe())`;
     const sqlScript = `-- Audit Query for ${profile.filename}\nSELECT COUNT(*) as total_rows, ROUND(AVG(${profile.columns.find(c => c.type === 'numeric')?.name || 'revenue'}), 2) as avg_val FROM dataset_table;`;
+
+    const insights = ds.insights || generateAutomatedInsights(rows, profile);
 
     return {
       generatedAt: new Date().toISOString(),
@@ -775,6 +893,7 @@ class ClientAnalyticsEngine {
       executiveBrief,
       businessEconomics: calcs,
       kpis,
+      insights,
       visualSections,
       dataQualityHealth,
       actionPlan,

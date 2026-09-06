@@ -34,6 +34,7 @@ import { VisualStudioView } from './components/VisualStudioView.js';
 import { TransformView } from './components/TransformView.js';
 import { ExplorerView } from './components/ExplorerView.js';
 import { CleaningAssistantView } from './components/CleaningAssistantView.js';
+import { Company360View } from './components/Company360View.js';
 import { UploadModal } from './components/UploadModal.js';
 import { OutlierDrilldownDrawer } from './components/OutlierDrilldownDrawer.js';
 import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
@@ -215,6 +216,31 @@ export default function App() {
     fetchDatasets().then(res => setDatasets(res.datasets));
   };
 
+  // Handle batch multi-file upload success
+  const handleBatchUploadSuccess = async (count: number) => {
+    try {
+      const updated = await fetchDatasets();
+      setDatasets(updated.datasets);
+      if (updated.activeId) {
+        const [prof, qual, ins] = await Promise.all([
+          fetchProfile(updated.activeId),
+          fetchQuality(updated.activeId),
+          fetchInsights(updated.activeId),
+        ]);
+        setProfile(prof);
+        setQuality(qual);
+        setInsights(ins);
+      }
+      setActiveTab('company360');
+      setNotification({
+        type: 'success',
+        message: `Successfully synchronized ${count} department datasets in Enterprise 360° model!`,
+      });
+    } catch (err) {
+      console.error('Failed to sync datasets after batch upload:', err);
+    }
+  };
+
   // Execute Natural Language Query
   const handleAskQuestion = async (question: string) => {
     if (!profile) return;
@@ -317,6 +343,7 @@ export default function App() {
         onQuickAsk={handleAskQuestion}
         qualityScore={quality?.score}
         loading={loadingInitial}
+        onOpenCompany360={() => setActiveTab('company360')}
       />
 
       {/* Main Workspace Body: Sidebar + Active View */}
@@ -367,6 +394,16 @@ export default function App() {
                   <ExecutiveReportView
                     profile={profile}
                     onNavigateTab={setActiveTab}
+                  />
+                )}
+
+                {activeTab === 'company360' && (
+                  <Company360View
+                    onSelectDataset={(id) => {
+                      handleSelectDataset(id);
+                      setActiveTab('overview');
+                    }}
+                    onOpenUploadModal={() => setUploadModalOpen(true)}
                   />
                 )}
 
@@ -459,6 +496,11 @@ export default function App() {
         isOpen={uploadModalOpen}
         onClose={() => setUploadModalOpen(false)}
         onUploadSuccess={handleUploadSuccess}
+        onBatchUploadSuccess={handleBatchUploadSuccess}
+        onSwitchToCompany360={() => {
+          setUploadModalOpen(false);
+          setActiveTab('company360');
+        }}
       />
 
       {/* Statistical Outlier Drill-Down Drawer */}
