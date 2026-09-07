@@ -2,9 +2,11 @@ import { AnalysisPlan, ColumnProfile, DataHandlingReport, DatasetProfile } from 
 import {
   resolveColumn,
   resolveMetricFromQuery,
+  resolveDimensionFromQuery,
   resolveAggregation,
   validateAndRepairPlan,
   applyFollowUpContext,
+  detectDatasetDomain,
 } from './query_resolver.js';
 import { generateWithGemini, getGeminiClient, getAiClient } from './gemini_client.js';
 
@@ -20,6 +22,7 @@ export function parseIntentDeterministic(
   const numCols = profile.columns.filter(c => c.type === 'numeric');
   const catCols = profile.columns.filter(c => c.type === 'categorical' || c.type === 'text');
   const dateCols = profile.columns.filter(c => c.type === 'datetime');
+  const domain = detectDatasetDomain(profile).domain;
 
   // Check multi-turn follow-up refinements first if previousPlan exists
   if (previousPlan) {
@@ -50,7 +53,7 @@ export function parseIntentDeterministic(
   }
 
   // 1. Safe Metric Resolution
-  const metricRes = resolveMetricFromQuery(question, profile.columns, previousPlan);
+  const metricRes = resolveMetricFromQuery(question, profile.columns, previousPlan, { domain });
 
   if (metricRes.status === 'ambiguous') {
     return {
@@ -84,41 +87,9 @@ export function parseIntentDeterministic(
 
   // 2. Dimension / Group by Resolution using resolver hierarchy
   let matchedGroup: string | undefined;
-
-  // Check direct column matches
-  for (const c of [...catCols, ...dateCols]) {
-    const res = resolveColumn(c.name, profile.columns);
-    const colRegex = new RegExp(`\\b${c.name.toLowerCase()}\\b`, 'i');
-    if (colRegex.test(q)) {
-      matchedGroup = c.name;
-      break;
-    }
-  }
-
-  // Check dimension synonyms
-  if (!matchedGroup) {
-    if (q.includes('region') || q.includes('country') || q.includes('territory') || q.includes('area') || q.includes('geography')) {
-      const match = catCols.find(c => {
-        const n = c.name.toLowerCase();
-        return n.includes('region') || n.includes('country') || n.includes('territory') || n.includes('area');
-      });
-      if (match) matchedGroup = match.name;
-    } else if (q.includes('product') || q.includes('item') || q.includes('sku')) {
-      const match = catCols.find(c => {
-        const n = c.name.toLowerCase();
-        return n.includes('product') || n.includes('item') || n.includes('sku');
-      });
-      if (match) matchedGroup = match.name;
-    } else if (q.includes('category') || q.includes('department')) {
-      const match = catCols.find(c => c.name.toLowerCase().includes('category'));
-      if (match) matchedGroup = match.name;
-    } else if (q.includes('segment') || q.includes('customer') || q.includes('tier') || q.includes('client')) {
-      const match = catCols.find(c => {
-        const n = c.name.toLowerCase();
-        return n.includes('segment') || n.includes('customer') || n.includes('client') || n.includes('tier');
-      });
-      if (match) matchedGroup = match.name;
-    }
+  const dimRes = resolveDimensionFromQuery(question, profile.columns, { domain });
+  if (dimRes.column) {
+    matchedGroup = dimRes.column.name;
   }
 
   // 3. Semantic Aggregation & Direction

@@ -1,25 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import {
-  ActiveTab,
-  AnalysisResult,
-  DataQualityAudit,
-  DatasetListItem,
-  DatasetProfile,
-  InsightItem,
-  OutlierDrilldownResult,
-  PinnedChart,
-} from './types.js';
-import {
-  askDataQuery,
-  fetchDatasets,
-  fetchInsights,
-  fetchOutlierDrilldown,
-  fetchProfile,
-  fetchQuality,
-  loadSampleDataset,
-  switchActiveDataset,
-  undoCleaningAction,
-} from './api.js';
+import React, { useState, useCallback } from 'react';
+import { ActiveTab } from './types.js';
 
 import { Header } from './components/Header.js';
 import { Sidebar } from './components/Sidebar.js';
@@ -39,297 +19,91 @@ import { UploadModal } from './components/UploadModal.js';
 import { OutlierDrilldownDrawer } from './components/OutlierDrilldownDrawer.js';
 import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 
+import { useDataset } from './hooks/useDataset.js';
+import { useAnalysis } from './hooks/useAnalysis.js';
+import { usePinnedCharts } from './hooks/usePinnedCharts.js';
+import { useOutlierDrilldown } from './hooks/useOutlierDrilldown.js';
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [uploadModalOpen, setUploadModalOpen] = useState<boolean>(false);
 
-  const [datasets, setDatasets] = useState<DatasetListItem[]>([]);
-  const [profile, setProfile] = useState<DatasetProfile | null>(null);
-  const [quality, setQuality] = useState<DataQualityAudit | null>(null);
-  const [insights, setInsights] = useState<InsightItem[]>([]);
-
-  const [notification, setNotification] = useState<{
-    message: string;
-    type: 'info' | 'error' | 'success';
-  } | null>(null);
-
-  const [activeQueryResult, setActiveQueryResult] = useState<AnalysisResult | null>(null);
-  const [queryHistory, setQueryHistory] = useState<AnalysisResult[]>([]);
-  const [queryLoading, setQueryLoading] = useState<boolean>(false);
-
   const [preselectedClean, setPreselectedClean] = useState<{ action: string; column?: string }>({
     action: 'remove_duplicates',
   });
   const [preselectedChart, setPreselectedChart] = useState<any | null>(null);
-  const [loadingInitial, setLoadingInitial] = useState<boolean>(true);
 
-  // Pinned Charts State (persisted in localStorage)
-  const [pinnedCharts, setPinnedCharts] = useState<PinnedChart[]>(() => {
-    try {
-      const saved = localStorage.getItem('pja_pinned_charts');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  // Hook 1: Analysis & Query Execution
+  const {
+    activeQueryResult,
+    setActiveQueryResult,
+    queryHistory,
+    queryLoading,
+    handleAskQuestion: askQuestion,
+    resetActiveQuery,
+  } = useAnalysis((msg, type) => notify(msg, type));
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('pja_pinned_charts', JSON.stringify(pinnedCharts));
-    } catch (e) {}
-  }, [pinnedCharts]);
+  // Hook 2: Dataset State & Persistence
+  const {
+    datasets,
+    profile,
+    quality,
+    insights,
+    loadingInitial,
+    notification,
+    setNotification,
+    notify,
+    handleSelectDataset,
+    handleReloadSample,
+    handleUploadSuccess,
+    handleBatchUploadSuccess,
+    handleDatasetUpdated,
+    handleUndoCleaning,
+  } = useDataset(resetActiveQuery);
 
-  const handlePinChart = (chartOrObject: any, titleOrSubtitle?: string) => {
-    let pinTitle = 'Pinned Visualization';
-    let chartPayload = chartOrObject;
+  // Hook 3: Pinned Charts
+  const { pinnedCharts, handlePinChart, handleRemovePinnedChart } = usePinnedCharts(notify);
 
-    if (chartOrObject && typeof chartOrObject === 'object' && chartOrObject.chart) {
-      chartPayload = chartOrObject.chart;
-      pinTitle = chartOrObject.title || titleOrSubtitle || 'Pinned Visualization';
-    } else if (typeof titleOrSubtitle === 'string' && titleOrSubtitle.trim()) {
-      pinTitle = titleOrSubtitle.trim();
-    }
-
-    const newPin: PinnedChart = {
-      id: (chartOrObject && chartOrObject.id) || `pin-${Date.now()}`,
-      title: pinTitle,
-      chart: chartPayload,
-      pinnedAt: new Date().toISOString(),
-    };
-    setPinnedCharts(prev => [newPin, ...prev.filter(p => p.id !== newPin.id)]);
-    setNotification({
-      type: 'success',
-      message: `Pinned "${pinTitle}" to Executive BI Dashboard!`,
-    });
-  };
-
-  const handleRemovePinnedChart = (id: string) => {
-    setPinnedCharts(prev => prev.filter(c => c.id !== id));
-  };
-
-  // Auto-dismiss notification after 5s
-  useEffect(() => {
-    if (notification) {
-      const t = setTimeout(() => setNotification(null), 5000);
-      return () => clearTimeout(t);
-    }
-  }, [notification]);
-
-  // Outlier drilldown state
-  const [outlierDrawerOpen, setOutlierDrawerOpen] = useState<boolean>(false);
-  const [outlierDrilldownData, setOutlierDrilldownData] = useState<OutlierDrilldownResult | null>(null);
-  const [outlierLoading, setOutlierLoading] = useState<boolean>(false);
-
-  // Load initial datasets and default sample dataset on mount
-  useEffect(() => {
-    async function initApp() {
-      setLoadingInitial(true);
-      try {
-        const { datasets: dsList, activeId } = await fetchDatasets();
-        setDatasets(dsList);
-
-        if (activeId) {
-          const [prof, qual, ins] = await Promise.all([
-            fetchProfile(activeId),
-            fetchQuality(activeId),
-            fetchInsights(activeId),
-          ]);
-          setProfile(prof);
-          setQuality(qual);
-          setInsights(ins);
-        } else {
-          const sample = await loadSampleDataset();
-          setProfile(sample.profile);
-          setQuality(sample.quality);
-          setInsights(sample.insights);
-          const updated = await fetchDatasets();
-          setDatasets(updated.datasets);
-        }
-      } catch (err) {
-        console.error('Initial load error:', err);
-      } finally {
-        setLoadingInitial(false);
-      }
-    }
-
-    initApp();
-  }, []);
-
-  // Switch Dataset
-  const handleSelectDataset = async (datasetId: string) => {
-    setLoadingInitial(true);
-    try {
-      const prof = await switchActiveDataset(datasetId);
-      const [qual, ins] = await Promise.all([
-        fetchQuality(datasetId),
-        fetchInsights(datasetId),
-      ]);
-      setProfile(prof);
-      setQuality(qual);
-      setInsights(ins);
-      setActiveQueryResult(null);
-    } catch (err) {
-      console.error('Failed to switch dataset:', err);
-    } finally {
-      setLoadingInitial(false);
-    }
-  };
-
-  // Reload Sample Dataset
-  const handleReloadSample = async () => {
-    setLoadingInitial(true);
-    try {
-      const sample = await loadSampleDataset();
-      setProfile(sample.profile);
-      setQuality(sample.quality);
-      setInsights(sample.insights);
-      const ds = await fetchDatasets();
-      setDatasets(ds.datasets);
-      setActiveQueryResult(null);
-      setActiveTab('overview');
-      setNotification({ message: 'Loaded sample B2B transactions dataset.', type: 'success' });
-    } catch (err) {
-      console.error('Failed to load sample:', err);
-      setNotification({ message: 'Failed to reload sample dataset. Please try again.', type: 'error' });
-    } finally {
-      setLoadingInitial(false);
-    }
-  };
-
-  // Handle successful file upload
-  const handleUploadSuccess = (data: {
-    datasetId: string;
-    profile: DatasetProfile;
-    quality: DataQualityAudit;
-    insights: InsightItem[];
-  }) => {
-    setProfile(data.profile);
-    setQuality(data.quality);
-    setInsights(data.insights);
-    setActiveQueryResult(null);
-    setActiveTab('overview');
-    setNotification({
-      message: `Dataset "${data.profile.filename}" loaded successfully (${data.profile.rowCount.toLocaleString()} rows).`,
-      type: 'success',
-    });
-    fetchDatasets().then(res => setDatasets(res.datasets));
-  };
-
-  // Handle batch multi-file upload success
-  const handleBatchUploadSuccess = async (count: number) => {
-    try {
-      const updated = await fetchDatasets();
-      setDatasets(updated.datasets);
-      if (updated.activeId) {
-        const [prof, qual, ins] = await Promise.all([
-          fetchProfile(updated.activeId),
-          fetchQuality(updated.activeId),
-          fetchInsights(updated.activeId),
-        ]);
-        setProfile(prof);
-        setQuality(qual);
-        setInsights(ins);
-      }
-      setActiveTab('company360');
-      setNotification({
-        type: 'success',
-        message: `Successfully synchronized ${count} department datasets in Enterprise 360° model!`,
-      });
-    } catch (err) {
-      console.error('Failed to sync datasets after batch upload:', err);
-    }
-  };
+  // Hook 4: Outlier Statistical Drill-Down
+  const {
+    outlierDrawerOpen,
+    outlierDrilldownData,
+    outlierLoading,
+    handleInspectOutliers: inspectOutliers,
+    handleCloseOutlierDrawer,
+  } = useOutlierDrilldown();
 
   // Execute Natural Language Query
-  const handleAskQuestion = async (question: string) => {
-    if (!profile) return;
-    setActiveTab('ask');
-    setQueryLoading(true);
-    try {
-      const historyContext = queryHistory.slice(0, 5).map(h => ({
-        question: h.question,
-        answerSummary: h.answer,
-        plan: h.plan,
-      }));
-      const result = await askDataQuery(profile.id, question, historyContext);
-      setActiveQueryResult(result);
-      setQueryHistory(prev => [result, ...prev.filter(h => h.question !== question)].slice(0, 15));
-      if (!result.success && result.error) {
-        if (result.error.code === 'CLARIFICATION_REQUIRED' || result.error.code === 'AMBIGUOUS_METRIC') {
-          setNotification({
-            message: 'Clarification needed: please select a specific metric.',
-            type: 'info',
-          });
-        } else {
-          setNotification({
-            message: result.error.message || 'Analytical query could not be computed.',
-            type: 'error',
-          });
-        }
-      }
-    } catch (err: any) {
-      console.error('Query execution error:', err);
-      setNotification({
-        message: err.message || 'Error processing query with AI agent.',
-        type: 'error',
-      });
-    } finally {
-      setQueryLoading(false);
-    }
-  };
+  const handleAskQuestion = useCallback(
+    async (question: string) => {
+      if (!profile) return;
+      setActiveTab('ask');
+      await askQuestion(profile.id, question);
+    },
+    [profile, askQuestion]
+  );
 
   // Pre-fill Cleaning action
-  const handleSelectCleaningAction = (action: string, column?: string) => {
+  const handleSelectCleaningAction = useCallback((action: string, column?: string) => {
     setPreselectedClean({ action, column });
     setActiveTab('cleaner');
-  };
+  }, []);
 
   // Pre-fill Visual Studio chart
-  const handlePlotInStudio = (suggestion: any) => {
+  const handlePlotInStudio = useCallback((suggestion: any) => {
     setPreselectedChart(suggestion);
     setActiveTab('studio');
-  };
+  }, []);
 
   // Handle outlier drilldown inspection
-  const handleInspectOutliers = async (column: string) => {
-    if (!profile) return;
-    setOutlierDrawerOpen(true);
-    setOutlierLoading(true);
-    try {
-      const res = await fetchOutlierDrilldown(profile.id, column);
-      setOutlierDrilldownData(res);
-    } catch (err) {
-      console.error('Failed to fetch outlier drilldown:', err);
-    } finally {
-      setOutlierLoading(false);
-    }
-  };
-
-  // Handle cleaning completed and saved
-  const handleDatasetUpdated = async (newDatasetId: string) => {
-    await handleSelectDataset(newDatasetId);
-    const ds = await fetchDatasets();
-    setDatasets(ds.datasets);
-  };
-
-  // Handle undo cleaning or transformation
-  const handleUndoCleaning = async () => {
-    if (!profile) return;
-    try {
-      const res = await undoCleaningAction(profile.id);
-      setNotification({
-        type: 'info',
-        message: res.message || 'Restored previous dataset version.',
-      });
-      await handleDatasetUpdated(profile.id);
-    } catch (err: any) {
-      setNotification({
-        type: 'error',
-        message: err.message || 'Unable to undo operation.',
-      });
-    }
-  };
+  const handleInspectOutliers = useCallback(
+    async (column: string) => {
+      if (!profile) return;
+      await inspectOutliers(profile.id, column);
+    },
+    [profile, inspectOutliers]
+  );
 
   return (
     <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col font-sans selection:bg-blue-600/30 selection:text-blue-200">
@@ -506,11 +280,11 @@ export default function App() {
       {/* Statistical Outlier Drill-Down Drawer */}
       <OutlierDrilldownDrawer
         isOpen={outlierDrawerOpen}
-        onClose={() => setOutlierDrawerOpen(false)}
+        onClose={handleCloseOutlierDrawer}
         data={outlierDrilldownData}
         loading={outlierLoading}
         onCleanOutliers={(col) => {
-          setOutlierDrawerOpen(false);
+          handleCloseOutlierDrawer();
           handleSelectCleaningAction('trim_outliers', col);
         }}
       />

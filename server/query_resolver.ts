@@ -4,6 +4,10 @@ import {
   DatasetProfile,
   FilterCondition,
 } from './types.js';
+import { detectDatasetDomain, type DatasetDomain } from './suggestion_generator.js';
+
+export { detectDatasetDomain };
+export type { DatasetDomain };
 
 export interface ColumnMatchResult {
   status: 'exact' | 'case_insensitive' | 'normalized' | 'synonym' | 'strong_fuzzy' | 'ambiguous' | 'not_found';
@@ -58,17 +62,20 @@ function escapeRegex(text: string): string {
 }
 
 // ----------------------------------------------------
-// SYNONYM TAXONOMY
+// DOMAIN-AWARE SYNONYM TAXONOMY
 // ----------------------------------------------------
 
-interface SynonymDefinition {
+export interface DomainAwareSynonymDefinition {
+  domain: DatasetDomain | 'all';
   canonicalKey: string;
   type: 'numeric' | 'categorical' | 'datetime';
   synonyms: string[];
 }
 
-const SYNONYM_DICTIONARY: SynonymDefinition[] = [
+export const BASE_SYNONYM_DICTIONARY: DomainAwareSynonymDefinition[] = [
+  // E-commerce & Sales Domain: In sales, "turnover" means revenue / gross sales
   {
+    domain: 'ecommerce_sales',
     canonicalKey: 'revenue',
     type: 'numeric',
     synonyms: [
@@ -86,7 +93,211 @@ const SYNONYM_DICTIONARY: SynonymDefinition[] = [
       'revenue amount',
     ],
   },
+  // General fallback: standard revenue synonyms (without ambiguous turnover if unknown)
   {
+    domain: 'general',
+    canonicalKey: 'revenue',
+    type: 'numeric',
+    synonyms: [
+      'revenue',
+      'sales',
+      'gross revenue',
+      'gross sales',
+      'billing',
+      'billings',
+      'topline',
+      'total sales',
+      'total revenue',
+      'sales amount',
+      'revenue amount',
+    ],
+  },
+  // HR / Workforce Domain: In HR, "turnover" means ATTRITION / EMPLOYEE DEPARTURE, never revenue!
+  {
+    domain: 'hr_workforce',
+    canonicalKey: 'attrition',
+    type: 'categorical',
+    synonyms: [
+      'attrition',
+      'turnover',
+      'churn',
+      'employee turnover',
+      'staff turnover',
+      'departures',
+      'left',
+      'resignations',
+      'separation',
+      'terminated',
+    ],
+  },
+  {
+    domain: 'hr_workforce',
+    canonicalKey: 'salary',
+    type: 'numeric',
+    synonyms: [
+      'salary',
+      'wage',
+      'wages',
+      'compensation',
+      'pay',
+      'annual salary',
+      'monthly salary',
+      'earnings',
+      'base pay',
+    ],
+  },
+  {
+    domain: 'hr_workforce',
+    canonicalKey: 'tenure',
+    type: 'numeric',
+    synonyms: [
+      'tenure',
+      'years at company',
+      'years of service',
+      'service years',
+      'experience',
+      'seniority',
+    ],
+  },
+  {
+    domain: 'hr_workforce',
+    canonicalKey: 'department',
+    type: 'categorical',
+    synonyms: [
+      'department',
+      'dept',
+      'division',
+      'team',
+      'business unit',
+      'group',
+      'function',
+    ],
+  },
+  // Marketing Domain
+  {
+    domain: 'marketing',
+    canonicalKey: 'spend',
+    type: 'numeric',
+    synonyms: [
+      'spend',
+      'ad spend',
+      'advertising spend',
+      'ad cost',
+      'cost',
+      'budget',
+      'expenditure',
+      'ad spend total',
+    ],
+  },
+  {
+    domain: 'marketing',
+    canonicalKey: 'conversions',
+    type: 'numeric',
+    synonyms: [
+      'conversions',
+      'leads',
+      'signups',
+      'acquisitions',
+      'sales conversions',
+      'goal completions',
+    ],
+  },
+  {
+    domain: 'marketing',
+    canonicalKey: 'clicks',
+    type: 'numeric',
+    synonyms: [
+      'clicks',
+      'traffic',
+      'visits',
+      'impressions',
+      'views',
+      'cpc',
+      'ctr',
+    ],
+  },
+  {
+    domain: 'marketing',
+    canonicalKey: 'campaign',
+    type: 'categorical',
+    synonyms: [
+      'campaign',
+      'ad group',
+      'channel',
+      'ad name',
+      'medium',
+      'source',
+      'marketing campaign',
+    ],
+  },
+  // Voting & Election Domain
+  {
+    domain: 'voting_election',
+    canonicalKey: 'vote',
+    type: 'numeric',
+    synonyms: [
+      'vote',
+      'votes',
+      'ballot',
+      'ballots',
+      'turnout',
+      'vote count',
+      'count',
+      'responses',
+      'response count',
+    ],
+  },
+  {
+    domain: 'voting_election',
+    canonicalKey: 'candidate',
+    type: 'categorical',
+    synonyms: [
+      'candidate',
+      'nominee',
+      'politician',
+      'candidate name',
+    ],
+  },
+  {
+    domain: 'voting_election',
+    canonicalKey: 'party',
+    type: 'categorical',
+    synonyms: [
+      'party',
+      'political party',
+      'affiliation',
+      'caucus',
+    ],
+  },
+  // Sentiment Domain
+  {
+    domain: 'sentiment',
+    canonicalKey: 'score',
+    type: 'numeric',
+    synonyms: [
+      'sentiment score',
+      'polarity',
+      'satisfaction score',
+      'sentiment rating',
+      'rating',
+      'score',
+    ],
+  },
+  {
+    domain: 'sentiment',
+    canonicalKey: 'sentiment_label',
+    type: 'categorical',
+    synonyms: [
+      'sentiment',
+      'sentiment label',
+      'polarity label',
+      'feeling',
+      'satisfaction',
+    ],
+  },
+  // Universal Across All Domains
+  {
+    domain: 'all',
     canonicalKey: 'profit',
     type: 'numeric',
     synonyms: [
@@ -101,11 +312,10 @@ const SYNONYM_DICTIONARY: SynonymDefinition[] = [
       'total profit',
       'margin',
       'margins',
-      'profit margin',
-      'average margin',
     ],
   },
   {
+    domain: 'all',
     canonicalKey: 'margin',
     type: 'numeric',
     synonyms: [
@@ -119,6 +329,7 @@ const SYNONYM_DICTIONARY: SynonymDefinition[] = [
     ],
   },
   {
+    domain: 'all',
     canonicalKey: 'quantity',
     type: 'numeric',
     synonyms: [
@@ -134,6 +345,7 @@ const SYNONYM_DICTIONARY: SynonymDefinition[] = [
     ],
   },
   {
+    domain: 'all',
     canonicalKey: 'cost',
     type: 'numeric',
     synonyms: [
@@ -142,23 +354,23 @@ const SYNONYM_DICTIONARY: SynonymDefinition[] = [
       'cogs',
       'expense',
       'expenses',
-      'spend',
-      'spending',
-      'expenditure',
       'total cost',
     ],
   },
   {
+    domain: 'all',
     canonicalKey: 'price',
     type: 'numeric',
     synonyms: ['price', 'unit price', 'selling price', 'retail price', 'fee', 'charge'],
   },
   {
+    domain: 'all',
     canonicalKey: 'discount',
     type: 'numeric',
     synonyms: ['discount', 'discount amount', 'discount rate', 'rebate', 'markdown'],
   },
   {
+    domain: 'all',
     canonicalKey: 'order_value',
     type: 'numeric',
     synonyms: [
@@ -172,36 +384,43 @@ const SYNONYM_DICTIONARY: SynonymDefinition[] = [
     ],
   },
   {
+    domain: 'all',
     canonicalKey: 'region',
     type: 'categorical',
     synonyms: ['region', 'territory', 'geography', 'geo', 'area', 'zone', 'market', 'location'],
   },
   {
+    domain: 'all',
     canonicalKey: 'country',
     type: 'categorical',
     synonyms: ['country', 'nation', 'state', 'province'],
   },
   {
+    domain: 'all',
     canonicalKey: 'product',
     type: 'categorical',
     synonyms: ['product', 'item', 'sku', 'product name', 'offering', 'good', 'merchandise'],
   },
   {
+    domain: 'all',
     canonicalKey: 'category',
     type: 'categorical',
     synonyms: ['category', 'product category', 'department', 'line', 'class', 'classification'],
   },
   {
+    domain: 'all',
     canonicalKey: 'segment',
     type: 'categorical',
     synonyms: ['segment', 'customer segment', 'tier', 'cohort', 'audience', 'group'],
   },
   {
+    domain: 'all',
     canonicalKey: 'customer',
     type: 'categorical',
     synonyms: ['customer', 'client', 'account', 'buyer', 'consumer', 'patron', 'customer name'],
   },
   {
+    domain: 'all',
     canonicalKey: 'date',
     type: 'datetime',
     synonyms: [
@@ -217,6 +436,40 @@ const SYNONYM_DICTIONARY: SynonymDefinition[] = [
     ],
   },
 ];
+
+// Backwards compatibility export
+export const SYNONYM_DICTIONARY = BASE_SYNONYM_DICTIONARY;
+
+/**
+ * Infer domain from columns when a full DatasetProfile is not available.
+ */
+export function inferDomainFromColumns(columns: ColumnProfile[]): DatasetDomain {
+  if (!columns || columns.length === 0) return 'general';
+  const dummyProfile: DatasetProfile = {
+    id: 'temp',
+    filename: 'data.csv',
+    rowCount: 100,
+    columnCount: columns.length,
+    memoryEstimateKb: 10,
+    duplicateRowCount: 0,
+    duplicatePercentage: 0,
+    totalMissingCells: 0,
+    missingPercentage: 0,
+    columns,
+    createdAt: new Date().toISOString(),
+  };
+  return detectDatasetDomain(dummyProfile).domain;
+}
+
+/**
+ * Retrieve synonym groups filtered by domain.
+ */
+export function getSynonymsForDomain(domain?: DatasetDomain): DomainAwareSynonymDefinition[] {
+  if (!domain || domain === 'general') {
+    return BASE_SYNONYM_DICTIONARY.filter(g => g.domain === 'all' || g.domain === 'general');
+  }
+  return BASE_SYNONYM_DICTIONARY.filter(g => g.domain === 'all' || g.domain === domain);
+}
 
 // Generic / ambiguous metric tokens that do not point to a specific column
 export const GENERIC_METRIC_TERMS = [
@@ -261,6 +514,7 @@ export function resolveColumn(
   columns: ColumnProfile[],
   options?: {
     typeFilter?: 'numeric' | 'categorical' | 'datetime' | 'any';
+    domain?: DatasetDomain;
   }
 ): ColumnMatchResult {
   const trimmed = target ? target.trim() : '';
@@ -335,8 +589,10 @@ export function resolveColumn(
   }
 
   // TIER 4: Known semantic synonym match
-  // Find which synonym definition matches the target
-  const matchingSynGroups = SYNONYM_DICTIONARY.filter(group => {
+  // Find which synonym definition matches the target for active domain
+  const activeDomain = options?.domain || inferDomainFromColumns(columns);
+  const synDict = getSynonymsForDomain(activeDomain);
+  const matchingSynGroups = synDict.filter(group => {
     return group.synonyms.some(s => {
       return s.toLowerCase() === trimmedLower || normalizeIdentifier(s) === normTarget;
     });
@@ -431,7 +687,10 @@ export function resolveColumn(
 export function resolveMetricFromQuery(
   question: string,
   columns: ColumnProfile[],
-  previousPlan?: AnalysisPlan
+  previousPlan?: AnalysisPlan,
+  options?: {
+    domain?: DatasetDomain;
+  }
 ): MetricResolutionResult {
   const q = question.toLowerCase().trim();
   const numCols = columns.filter(c => c.type === 'numeric');
@@ -510,9 +769,11 @@ export function resolveMetricFromQuery(
     };
   }
 
-  // Check synonym matching against question tokens
+  // Check synonym matching against question tokens using domain-aware dictionary
+  const activeDomain = options?.domain || inferDomainFromColumns(columns);
+  const synDict = getSynonymsForDomain(activeDomain).filter(g => g.type === 'numeric');
   const synonymMatches: ColumnProfile[] = [];
-  for (const group of SYNONYM_DICTIONARY.filter(g => g.type === 'numeric')) {
+  for (const group of synDict) {
     for (const syn of group.synonyms) {
       const synRegex = new RegExp(`\\b${escapeRegex(syn.toLowerCase())}\\b`, 'i');
       if (synRegex.test(q)) {
@@ -614,6 +875,81 @@ export function resolveMetricFromQuery(
       reason: `Dataset contains only single numeric metric: '${numCols[0].name}'.`,
     };
   }
+}
+
+// ----------------------------------------------------
+// 2B. SAFE DIMENSION RESOLUTION FROM QUERY
+// ----------------------------------------------------
+
+/**
+ * Safely resolves the intended dimension (group-by / category / time column) from a natural language question.
+ */
+export function resolveDimensionFromQuery(
+  question: string,
+  columns: ColumnProfile[],
+  options?: { domain?: DatasetDomain }
+): ColumnMatchResult {
+  const q = question.toLowerCase().trim();
+  const catAndDateCols = columns.filter(c => c.type === 'categorical' || c.type === 'text' || c.type === 'datetime');
+  if (catAndDateCols.length === 0) {
+    return { status: 'not_found', confidence: 'none', reason: 'No categorical or datetime columns in dataset' };
+  }
+
+  const domain = options?.domain || inferDomainFromColumns(columns);
+
+  // 1. Direct column-name mention (longest name first)
+  const sortedCols = [...catAndDateCols].sort((a, b) => b.name.length - a.name.length);
+  for (const c of sortedCols) {
+    const colRegex = new RegExp(`\\b${escapeRegex(c.name.toLowerCase())}\\b`, 'i');
+    if (colRegex.test(q)) {
+      return {
+        status: 'exact',
+        column: c,
+        confidence: 'high',
+        matchTier: '1-direct_mention',
+      };
+    }
+  }
+
+  // 2. Check "by <term>", "per <term>", "across <term>", "break down by <term>", "grouped by <term>"
+  const byMatch = q.match(/\b(?:by|per|across|break\s+down\s+by|grouped\s+by)\s+([a-z0-9_\s]{2,30})\b/i);
+  if (byMatch) {
+    const term = byMatch[1].trim();
+    // Resolve term against candidate columns using domain-aware resolver
+    const res = resolveColumn(term, catAndDateCols, { domain });
+    if (res.column) {
+      return res;
+    }
+  }
+
+  // 3. Domain-aware synonym matching on question tokens
+  const synDict = getSynonymsForDomain(domain).filter(g => g.type === 'categorical' || g.type === 'datetime');
+  for (const group of synDict) {
+    for (const syn of group.synonyms) {
+      const synRegex = new RegExp(`\\b${escapeRegex(syn.toLowerCase())}\\b`, 'i');
+      if (synRegex.test(q)) {
+        for (const col of catAndDateCols) {
+          const colLower = col.name.toLowerCase();
+          const colNorm = normalizeIdentifier(col.name);
+          const groupNorm = normalizeIdentifier(group.canonicalKey);
+          if (
+            colLower === group.canonicalKey ||
+            colNorm === groupNorm ||
+            group.synonyms.some(s => colLower === s.toLowerCase() || colNorm === normalizeIdentifier(s))
+          ) {
+            return {
+              status: 'synonym',
+              column: col,
+              confidence: 'high',
+              matchTier: '4-domain_synonym',
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return { status: 'not_found', confidence: 'none', reason: 'No dimension identified in query' };
 }
 
 // ----------------------------------------------------
@@ -785,6 +1121,7 @@ export function validateAndRepairPlan(
   const numCols = profile.columns.filter(c => c.type === 'numeric');
   const catCols = profile.columns.filter(c => c.type === 'categorical' || c.type === 'text');
   const dateCols = profile.columns.filter(c => c.type === 'datetime');
+  const domain = detectDatasetDomain(profile).domain;
 
   if (!rawPlan || typeof rawPlan !== 'object') {
     return {
@@ -805,7 +1142,7 @@ export function validateAndRepairPlan(
 
   // 1. Validate Metric
   if (plan.metric) {
-    const metricRes = resolveColumn(plan.metric, profile.columns);
+    const metricRes = resolveColumn(plan.metric, profile.columns, { domain });
     if (metricRes.status === 'not_found') {
       // Column does NOT exist in dataset! Do NOT fabricate!
       return {
@@ -863,7 +1200,7 @@ export function validateAndRepairPlan(
     }
   } else if (plan.operation !== 'clarification' && plan.operation !== 'filter') {
     // If no metric was specified by Gemini, attempt safe metric resolution
-    const safeMetricRes = resolveMetricFromQuery(question, profile.columns);
+    const safeMetricRes = resolveMetricFromQuery(question || '', profile.columns, undefined, { domain });
     if (safeMetricRes.status === 'resolved' && safeMetricRes.column) {
       plan.metric = safeMetricRes.column.name;
     } else if (safeMetricRes.status === 'ambiguous' || safeMetricRes.status === 'unknown') {
@@ -886,7 +1223,7 @@ export function validateAndRepairPlan(
   if (plan.group_by && Array.isArray(plan.group_by)) {
     const repairedGroups: string[] = [];
     for (const g of plan.group_by) {
-      const gRes = resolveColumn(g, profile.columns);
+      const gRes = resolveColumn(g, profile.columns, { domain });
       if (gRes.column) {
         repairedGroups.push(gRes.column.name);
       } else {
@@ -899,7 +1236,7 @@ export function validateAndRepairPlan(
 
   // 3. Semantic Aggregation Repair (e.g. Highest Average Order Value, Margin sum)
   if (plan.metric) {
-    const aggResult = resolveAggregation(question, plan.metric, plan.aggregation);
+    const aggResult = resolveAggregation(question || '', plan.metric, plan.aggregation);
     plan.aggregation = aggResult.aggregation;
     if (!plan.sort) {
       plan.sort = {
@@ -954,11 +1291,29 @@ export function validateAndRepairPlan(
       const other = numCols.find(c => c.name !== plan.metric);
       plan.secondary_metric = other?.name || numCols[1].name;
     } else {
-      const secRes = resolveColumn(plan.secondary_metric, numCols);
+      const secRes = resolveColumn(plan.secondary_metric, numCols, { domain });
       if (secRes.column) {
         plan.secondary_metric = secRes.column.name;
       }
     }
+  }
+
+  // 6. Validate & Repair Filters
+  if (plan.filters && Array.isArray(plan.filters)) {
+    const repairedFilters: FilterCondition[] = [];
+    for (const f of plan.filters) {
+      if (!f || !f.column) continue;
+      const colRes = resolveColumn(f.column, profile.columns, { domain });
+      if (colRes.column) {
+        repairedFilters.push({
+          ...f,
+          column: colRes.column.name,
+        });
+      } else {
+        console.warn(`Filter column '${f.column}' could not be resolved in dataset '${profile.filename}'.`);
+      }
+    }
+    plan.filters = repairedFilters;
   }
 
   // Ensure default limit

@@ -111,7 +111,8 @@ export interface DataQualityAudit {
 
 export interface CorrelationMatrixResult {
   columns: string[];
-  matrix: number[][];
+  matrix: (number | null)[][];
+  undefinedDetails?: { col1: string; col2: string; reason: string }[];
 }
 
 export interface OutlierDrilldownItem {
@@ -170,6 +171,7 @@ export interface DataHandlingReport {
 export interface AnalysisResult {
   success: boolean;
   question: string;
+  datasetId?: string;
   plan: any;
   answer: string;
   keyMetrics: { label: string; value: string; context?: string }[];

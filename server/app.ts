@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx';
 import path from 'path';
 import dotenv from 'dotenv';
 
-import { datasetStore } from './dataset_store.js';
+import { datasetStore, StoredDataset } from './dataset_store.js';
 import {
   calculateCorrelationMatrix,
   executeAnalysisPlan,
@@ -50,6 +50,16 @@ const getSessionId = (req: express.Request): string => {
   return 'default-session';
 };
 
+// Strict dataset resolver: resolves explicit ID or active dataset if 'active' is passed
+const getDatasetFromRequest = (req: express.Request): StoredDataset | null => {
+  const sid = getSessionId(req);
+  const id = req.params.id;
+  if (!id || id === 'active') {
+    return datasetStore.getActiveDataset(sid) || null;
+  }
+  return datasetStore.getDataset(sid, id) || null;
+};
+
 // Filename sanitizer to prevent path traversal
 const sanitizeFilename = (filename: string): string => {
   const base = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -69,6 +79,97 @@ const upload = multer({
     }
   },
 });
+
+// ====================================================
+// RATE LIMITING & SECURITY HARDENING
+// ====================================================
+
+interface RateLimitRecord {
+  timestamps: number[];
+}
+
+const rateLimitStore = new Map<string, RateLimitRecord>();
+
+// Clean up stale rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  const maxAge = 60 * 1000;
+  for (const [key, rec] of rateLimitStore.entries()) {
+    rec.timestamps = rec.timestamps.filter(ts => now - ts < maxAge);
+    if (rec.timestamps.length === 0) {
+      rateLimitStore.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
+
+export function createRateLimiter(options: {
+  windowMs: number;
+  maxRequests: number;
+  category: string;
+}) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const sid = getSessionId(req);
+    const ip = req.ip || req.socket.remoteAddress || '127.0.0.1';
+    const key = `${sid}:${ip}:${options.category}`;
+    const now = Date.now();
+
+    let record = rateLimitStore.get(key);
+    if (!record) {
+      record = { timestamps: [] };
+      rateLimitStore.set(key, record);
+    }
+
+    record.timestamps = record.timestamps.filter(ts => now - ts < options.windowMs);
+
+    if (record.timestamps.length >= options.maxRequests) {
+      const oldest = record.timestamps[0];
+      const retryAfter = Math.max(1, Math.ceil((oldest + options.windowMs - now) / 1000));
+      res.set('Retry-After', String(retryAfter));
+      return res.status(429).json({
+        success: false,
+        error: {
+          code: 'RATE_LIMIT_EXCEEDED',
+          message: `Too many requests for ${options.category}. Please slow down and try again in ${retryAfter} seconds.`,
+          retryAfter,
+        },
+      });
+    }
+
+    record.timestamps.push(now);
+    next();
+  };
+}
+
+// Request Timeout Middleware (45 seconds timeout on API routes)
+export function requestTimeoutMiddleware(timeoutMs: number = 45000) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!req.path.startsWith('/api/')) {
+      return next();
+    }
+
+    const timer = setTimeout(() => {
+      if (!res.headersSent) {
+        console.warn(`[Timeout] ${req.method} ${req.path} exceeded ${timeoutMs}ms limit`);
+        res.status(504).json({
+          success: false,
+          error: {
+            code: 'REQUEST_TIMEOUT',
+            message: `Request exceeded maximum server timeout limit (${timeoutMs / 1000}s).`,
+          },
+        });
+      }
+    }, timeoutMs);
+
+    res.on('finish', () => clearTimeout(timer));
+    res.on('close', () => clearTimeout(timer));
+
+    next();
+  };
+}
+
+// Attach security and timeout middlewares to /api
+app.use('/api', requestTimeoutMiddleware(45000));
+app.use('/api', createRateLimiter({ windowMs: 60000, maxRequests: 300, category: 'general' }));
 
 // ----------------------------------------------------
 // API ROUTES FIRST
@@ -181,6 +282,16 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       });
     }
 
+    if (rows.length > 500000) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'DATASET_TOO_LARGE',
+          message: `Dataset row count (${rows.length.toLocaleString()}) exceeds maximum allowed capacity of 500,000 rows.`,
+        },
+      });
+    }
+
     const stored = datasetStore.addDataset(sid, filename, rows);
 
     res.json({
@@ -229,6 +340,16 @@ app.post('/api/upload-batch', upload.array('files', 10), async (req, res) => {
         if (firstSheetName) {
           rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheetName], { defval: null }) as Record<string, any>[];
         }
+      }
+
+      if (rows.length > 500000) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'DATASET_TOO_LARGE',
+            message: `File "${filename}" exceeds maximum row limit of 500,000 rows (has ${rows.length.toLocaleString()} rows).`,
+          },
+        });
       }
 
       if (rows.length > 0) {
@@ -295,50 +416,45 @@ app.post('/api/company-360/refine', async (req, res) => {
 
 // Get Dataset Profile
 app.get('/api/profile/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
   res.json({ success: true, data: dataset.profile });
 });
 
 // Get Data Quality Audit
 app.get('/api/quality/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
   res.json({ success: true, data: dataset.qualityAudit });
 });
 
 // Get Automated Executive Insights
 app.get('/api/insights/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
   res.json({ success: true, data: dataset.insights });
 });
 
 // Get Columns List
 app.get('/api/columns/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
   res.json({ success: true, data: dataset.profile.columns });
 });
 
 // Correlation Matrix Endpoint
 app.get('/api/correlation-matrix/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
   const result = calculateCorrelationMatrix(dataset.rawRows, dataset.profile);
   res.json({ success: true, data: result });
@@ -346,10 +462,9 @@ app.get('/api/correlation-matrix/:id', (req, res) => {
 
 // Outlier Root-Cause Drill-Down Endpoint
 app.get('/api/outlier-drilldown/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
   const colName = req.query.column as string | undefined;
   const drilldown = getOutlierDrilldown(dataset.rawRows, dataset.profile, colName);
@@ -361,10 +476,9 @@ app.get('/api/outlier-drilldown/:id', (req, res) => {
 
 // Executive Power BI Style Dashboard Analytics Endpoint
 app.get('/api/dashboard/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
 
   const dimension = req.query.dimension as string | undefined;
@@ -394,10 +508,9 @@ app.get('/api/dashboard/:id', (req, res) => {
 
 // Executive Business Intelligence & Strategy Report Endpoint
 app.get('/api/report/:id', async (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
 
   try {
@@ -410,10 +523,9 @@ app.get('/api/report/:id', async (req, res) => {
 });
 
 app.post('/api/report/:id', async (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
 
   const { useAi, directive } = req.body || {};
@@ -431,10 +543,9 @@ app.post('/api/report/:id', async (req, res) => {
 
 // Targeted Section AI Refinement Endpoint
 app.post('/api/report/:id/refine-section', async (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
 
   const { section, instruction, currentContent } = req.body || {};
@@ -498,10 +609,9 @@ app.post('/api/report/:id/refine-section', async (req, res) => {
 
 // Data Explorer Raw Rows Endpoint with Cell Status Annotations & Pagination
 app.get('/api/data/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
 
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -596,11 +706,10 @@ app.get('/api/data/:id', (req, res) => {
 // Natural Language Query Endpoint
 // Workflow: Gemini Plan -> Deterministic Python/TS Math -> Validation -> Plotly Chart -> Gemini Explainer -> Transparent Data Handling
 app.post('/api/query/:id', async (req, res) => {
-  const sid = getSessionId(req);
   try {
-    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const dataset = getDatasetFromRequest(req);
     if (!dataset) {
-      return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+      return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
     }
 
     const { question, conversationHistory } = req.body;
@@ -668,11 +777,10 @@ app.post('/api/query/:id', async (req, res) => {
 
 // Grounded Suggested Questions Endpoint (GET)
 app.get('/api/suggestions/:id', async (req, res) => {
-  const sid = getSessionId(req);
   try {
-    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const dataset = getDatasetFromRequest(req);
     if (!dataset) {
-      return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+      return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
     }
 
     const suggestions = await generateSuggestionsForDataset(dataset.profile, {
@@ -686,7 +794,7 @@ app.get('/api/suggestions/:id', async (req, res) => {
     });
   } catch (err: any) {
     console.log('[Suggestions API] Serving schema-grounded deterministic suggestions fallback.');
-    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const dataset = getDatasetFromRequest(req);
     const fallbackSuggestions = dataset ? generateSchemaGroundedSuggestions(dataset.profile) : [];
     res.json({
       success: true,
@@ -697,11 +805,10 @@ app.get('/api/suggestions/:id', async (req, res) => {
 
 // Grounded Suggested Questions Endpoint (POST with context / follow-ups)
 app.post('/api/suggestions/:id', async (req, res) => {
-  const sid = getSessionId(req);
   try {
-    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const dataset = getDatasetFromRequest(req);
     if (!dataset) {
-      return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+      return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
     }
 
     const { lastQuestion, lastResult, count } = req.body || {};
@@ -718,7 +825,7 @@ app.post('/api/suggestions/:id', async (req, res) => {
     });
   } catch (err: any) {
     console.log('[Suggestions API] Serving schema-grounded deterministic suggestions fallback.');
-    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const dataset = getDatasetFromRequest(req);
     const fallbackSuggestions = dataset ? generateSchemaGroundedSuggestions(dataset.profile) : [];
     res.json({
       success: true,
@@ -729,11 +836,10 @@ app.post('/api/suggestions/:id', async (req, res) => {
 
 // Visual Studio Custom Chart Builder Endpoint
 app.post('/api/chart/:id', (req, res) => {
-  const sid = getSessionId(req);
   try {
-    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const dataset = getDatasetFromRequest(req);
     if (!dataset) {
-      return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+      return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
     }
 
     const { type, xAxis, yAxis, secondaryYAxis, colorDimension, aggregation, sortBy, sortDirection, topN } = req.body;
@@ -931,9 +1037,9 @@ app.post('/api/chart/:id', (req, res) => {
 app.post('/api/clean/:id', (req, res) => {
   const sid = getSessionId(req);
   try {
-    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const dataset = getDatasetFromRequest(req);
     if (!dataset) {
-      return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+      return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
     }
 
     const { action, column, constantValue, saveAsNew } = req.body;
@@ -1107,10 +1213,9 @@ LIMIT ${lim};`;
 
 // Interactive SQL Query Execution Endpoint
 app.post('/api/sql/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
-    return res.status(404).json({ success: false, error: 'Dataset not found.' });
+    return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
 
   const { query } = req.body;
@@ -1124,8 +1229,7 @@ app.post('/api/sql/:id', (req, res) => {
 
 // Export Filtered Subset (CSV or JSON)
 app.post('/api/export-subset/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
     return res.status(404).send('Dataset not found.');
   }
@@ -1168,8 +1272,7 @@ app.post('/api/export-subset/:id', (req, res) => {
 
 // Export Entire Dataset as CSV
 app.get('/api/export/:id', (req, res) => {
-  const sid = getSessionId(req);
-  const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+  const dataset = getDatasetFromRequest(req);
   if (!dataset) {
     return res.status(404).send('Dataset not found.');
   }
@@ -1184,9 +1287,9 @@ app.get('/api/export/:id', (req, res) => {
 app.post('/api/transform/:id', (req, res) => {
   const sid = getSessionId(req);
   try {
-    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const dataset = getDatasetFromRequest(req);
     if (!dataset) {
-      return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+      return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
     }
 
     const body = req.body || {};
@@ -1230,11 +1333,10 @@ app.post('/api/transform/:id', (req, res) => {
 
 // Business Assertion Rule Engine Evaluation Endpoint
 app.post('/api/quality/assertions/:id', (req, res) => {
-  const sid = getSessionId(req);
   try {
-    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const dataset = getDatasetFromRequest(req);
     if (!dataset) {
-      return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+      return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
     }
 
     const { assertions } = req.body;
@@ -1252,11 +1354,10 @@ app.post('/api/quality/assertions/:id', (req, res) => {
 
 // Data Dictionary Generation & Export Endpoint
 app.get('/api/data-dictionary/:id', (req, res) => {
-  const sid = getSessionId(req);
   try {
-    const dataset = datasetStore.getDataset(sid, req.params.id) || datasetStore.getActiveDataset(sid);
+    const dataset = getDatasetFromRequest(req);
     if (!dataset) {
-      return res.status(404).json({ success: false, error: { message: 'Dataset not found.' } });
+      return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
     }
 
     const prof = dataset.profile;

@@ -1,13 +1,13 @@
 # Data Studio by PJA
 
-> **Enterprise-Grade AI Exploratory Data Analysis & Deterministic Business Intelligence**  
-> Built for reliable, privacy-first corporate analytics with zero hallucination.
+> **Deterministic Analytics Engine & Session-Scoped AI Business Intelligence**  
+> Built for reliable, privacy-first corporate analytics with zero mathematical hallucination.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19.0-61dafb.svg)](https://reactjs.org/)
 [![Express](https://img.shields.io/badge/Express-4.21-lightgrey.svg)](https://expressjs.com/)
 [![Plotly.js](https://img.shields.io/badge/Plotly.js-Interactive_Charts-blueviolet.svg)](https://plotly.com/javascript/)
-[![Audit Suite](https://img.shields.io/badge/Tests-43%2F43_Passing_(100%25)-brightgreen.svg)](scripts/audit_suite.ts)
+[![Audit Suite](https://img.shields.io/badge/Tests-72%2F72_Passing_(100%25)-brightgreen.svg)](scripts/audit_suite.ts)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -97,8 +97,8 @@ Your raw data rows never leave the execution environment. The platform features 
 - Only anonymized column names, detected data types, and high-level statistical summaries (e.g. min, max, null count) are shared with the LLM planner.
 - No PII, customer records, or financial row values are sent to external API endpoints.
 
-### 3. Session Isolation & Multi-Tenancy
-All datasets, transformations, and pinned dashboard layouts are scoped to an isolated session cookie or header (`x-session-id`). Datasets uploaded in one browser tab or session are strictly invisible to others and automatically purged upon session termination.
+### 3. Session-Scoped Isolation
+All datasets, transformations, and pinned dashboard layouts are scoped to an isolated session identifier (`x-session-id`). Datasets uploaded in one browser tab or session are strictly isolated from other sessions and persist within the session lifecycle.
 
 ### 4. Automated Multi-Type Profiler
 The ingestion pipeline automatically inspects every column and categorizes it into:
@@ -204,7 +204,7 @@ npm run test:audit
 9. **Business Assertions Suite**: Verifies range, null, and uniqueness rule enforcement.
 10. **REST API Endpoint Suite**: Verifies `/api/health`, `/api/datasets`, `/api/dashboard/:id`, `/api/chart/:id`, `/api/transform/:id`, and `/api/data-dictionary/:id`.
 
-**Current Status**: `43 / 43 tests passing (100% success rate)`.
+**Current Status**: `72 / 72 tests passing (100% success rate) across 9 distinct edge-case datasets`.
 
 ---
 
@@ -214,10 +214,12 @@ npm run test:audit
 |---|---|
 | **API Key Security** | All calls to Google Gemini are strictly proxied server-side in Node.js/Express. No keys are ever shipped to the browser bundle or exposed in frontend client code. |
 | **Privacy Shield** | Only column names, detected types, and aggregated numeric moments are sent to the AI planner. Raw customer rows and PII are never sent to external LLM APIs. |
+| **Deterministic Math Engine** | Exact sums, means, margins, and distributions calculated via verified TypeScript statistical routines. Zero mathematical hallucination. |
 | **Safe Formula Execution** | Calculated columns strictly validate arithmetic syntax using whitelisted regexes to prevent arbitrary code execution or code injection. |
-| **Upload Limits** | Multer in-memory storage enforced with a 50MB file size ceiling and sanitized filenames to prevent path traversal attacks. |
-| **Multi-Tenant Isolation** | Session-isolated in-memory storage partitioned by `x-session-id`, preventing cross-user data leakage. |
-| **Error Handling** | Structured JSON responses with sanitized error messages and descriptive fallback states. |
+| **Upload & Complexity Limits** | In-memory storage enforced with a 50MB file size ceiling, 500,000 row ceiling, and sanitized filenames to prevent path traversal attacks. |
+| **Rate Limiting & Timeouts** | Sliding window rate limiting on all endpoints with stricter ceilings on AI routes, plus a 45-second request timeout guardrail. |
+| **Session-Scoped Isolation** | Session-isolated in-memory storage partitioned by `x-session-id`, preventing cross-session data leakage. |
+| **Error Handling** | Structured JSON responses with sanitized error codes, descriptive fallback states, and zero silent failures. |
 
 ---
 

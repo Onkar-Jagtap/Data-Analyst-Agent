@@ -332,6 +332,36 @@ export async function askDataQuery(
   if (res.ok && res.data && (res.data.success !== false || res.data.answer)) {
     return res.data;
   }
+  if (!clientEngine.hasDataset(datasetId)) {
+    return {
+      success: false,
+      question,
+      datasetId,
+      plan: null as any,
+      answer: `Analysis could not be computed: Dataset '${datasetId}' was not found in server or client session.`,
+      keyMetrics: [],
+      businessInterpretation: [],
+      dataHandling: {
+        totalRows: 0,
+        validRowsAnalyzed: 0,
+        excludedRows: 0,
+        missingValuesExcluded: 0,
+        invalidValuesExcluded: 0,
+        filteredOutRows: 0,
+        methodDescription: 'Dataset identity protection halted analysis.',
+        rulesApplied: ['Deterministic Safety Guard: Prevented analyzing incorrect dataset'],
+        warnings: [`Dataset '${datasetId}' is unavailable.`],
+        confidenceScore: 0,
+        isDeterministic: true,
+      },
+      error: {
+        code: 'DATASET_NOT_FOUND',
+        message: `Dataset '${datasetId}' is not loaded.`,
+        suggestion: 'Please verify the dataset is selected or upload it again.',
+      },
+    };
+  }
+
   const lastPlan = conversationHistory && conversationHistory.length > 0 ? conversationHistory[0].plan : undefined;
   return clientEngine.askData(datasetId, question, lastPlan);
 }

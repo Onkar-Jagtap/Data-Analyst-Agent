@@ -530,7 +530,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                   Strategic Financial Simulation Cockpit
                 </span>
               </div>
-              <p className="text-sm text-slate-200 leading-relaxed font-normal">
+              <p className="text-sm sm:text-[15px] text-slate-200 leading-relaxed font-normal">
                 Model compound bottom-line EBITDA lift from executing cross-department initiatives. Toggle individual actions or simulate full roadmap execution.
               </p>
             </div>
@@ -538,17 +538,17 @@ export const Company360View: React.FC<Company360ViewProps> = ({
             <div className="flex flex-wrap items-center gap-3">
               <div className="px-4 py-2.5 rounded-xl bg-slate-950/90 border border-emerald-800/60 shadow-inner flex items-center gap-3.5">
                 <div className="text-right">
-                  <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  <div className="text-xs font-bold text-slate-300 uppercase tracking-wider">
                     Simulated EBITDA Lift
                   </div>
                   <div className="text-xl sm:text-2xl font-black font-mono text-emerald-300 tracking-tight">
                     +{formatCurrency(simulatedEbitdaLift)}{' '}
-                    <span className="text-xs text-emerald-400/80 font-normal">/ yr</span>
+                    <span className="text-xs text-emerald-400/90 font-medium">/ yr</span>
                   </div>
                 </div>
                 <div className="h-9 w-px bg-slate-800" />
                 <div className="text-center">
-                  <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active</div>
+                  <div className="text-xs font-bold text-slate-300 uppercase tracking-wider">Active</div>
                   <div className="text-xs font-bold px-2 py-0.5 rounded-lg bg-emerald-950 border border-emerald-700/80 text-emerald-300 font-mono mt-0.5">
                     {Object.values(simulatedActions).filter(Boolean).length} / {analysis.strategicActions.length}
                   </div>
@@ -567,7 +567,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                     setSimulatedActions(all);
                   }
                 }}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 hover:text-white border border-slate-700 transition-colors shadow-sm flex items-center gap-1.5"
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs sm:text-sm font-bold text-slate-100 hover:text-white border border-slate-700 transition-colors shadow-sm flex items-center gap-1.5"
               >
                 <Zap className="w-3.5 h-3.5 text-amber-400" />
                 <span>{Object.values(simulatedActions).some(Boolean) ? 'Reset Simulation' : 'Simulate All (+$449k)'}</span>
@@ -585,7 +585,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
                       <Target className="w-5 h-5 text-blue-400" />
-                      <h2 className="text-lg sm:text-xl font-black text-slate-100 font-display tracking-tight">
+                      <h2 className="text-xl sm:text-2xl font-bold text-white font-display tracking-tight">
                         Cross-Functional Action Roadmap
                       </h2>
                     </div>
@@ -598,16 +598,16 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                     <button
                       type="button"
                       onClick={toggleAllExpanded}
-                      className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 hover:text-slate-100 border border-slate-700 transition-colors flex items-center gap-1.5"
+                      className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs sm:text-sm font-semibold text-slate-200 hover:text-white border border-slate-700 transition-colors flex items-center gap-1.5"
                     >
                       {analysis.strategicActions.every(a => expandedActionIds[a.id] ?? true) ? (
                         <>
-                          <ChevronUp className="w-3.5 h-3.5" />
+                          <ChevronUp className="w-3.5 h-3.5 text-slate-300" />
                           <span>Collapse Blueprints</span>
                         </>
                       ) : (
                         <>
-                          <ChevronDown className="w-3.5 h-3.5" />
+                          <ChevronDown className="w-3.5 h-3.5 text-slate-300" />
                           <span>Expand Blueprints</span>
                         </>
                       )}
@@ -617,7 +617,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
 
                 {/* Department Filter Bar */}
                 <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mr-1 flex items-center gap-1">
+                  <span className="text-xs font-bold text-slate-300 uppercase tracking-wider mr-1 flex items-center gap-1">
                     <Filter className="w-3.5 h-3.5 text-slate-400" />
                     Department:
                   </span>
@@ -632,15 +632,15 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                         type="button"
                         key={dept}
                         onClick={() => setDepartmentFilter(dept)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 border ${
+                        className={`px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 border ${
                           isDeptActive
                             ? 'bg-blue-600 text-white border-blue-500 shadow-sm shadow-blue-500/20'
                             : 'bg-slate-950/70 text-slate-300 hover:text-slate-100 border-slate-800 hover:border-slate-700'
                         }`}
                       >
                         <span>{dept}</span>
-                        <span className={`text-xs px-1.5 py-0.2 rounded-full font-mono ${
-                          isDeptActive ? 'bg-black/30 text-white' : 'bg-slate-800 text-slate-400'
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-mono ${
+                          isDeptActive ? 'bg-black/30 text-white' : 'bg-slate-800 text-slate-300'
                         }`}>
                           {count}
                         </span>
@@ -669,7 +669,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                             ? 'bg-slate-900 border-emerald-500/80 shadow-emerald-950/30 ring-1 ring-emerald-500/30'
                             : isSelected
                             ? 'bg-slate-900 border-blue-500/80 shadow-blue-950/30 ring-1 ring-blue-500/30'
-                            : 'bg-slate-900/90 border-slate-800 hover:border-slate-700/90'
+                            : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
                         }`}
                       >
                         {/* 1. Card Header Row */}
@@ -703,7 +703,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                               e.stopPropagation();
                               toggleSimulateAction(action.id);
                             }}
-                            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 shrink-0 ${
+                            className={`px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold border transition-all flex items-center gap-1.5 shrink-0 ${
                               isSimulated
                                 ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-600/30'
                                 : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border-slate-700'
@@ -711,7 +711,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                           >
                             {isSimulated ? (
                               <>
-                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <CheckCircle2 className="w-4 h-4" />
                                 <span>Simulated Active ({action.impactMetric || formatCurrency(action.annualEbitdaImpact || 0)})</span>
                               </>
                             ) : (
@@ -724,34 +724,34 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                         </div>
 
                         {/* 2. Card Title */}
-                        <h3 className="text-lg sm:text-xl font-black text-slate-100 font-display tracking-tight leading-snug">
+                        <h3 className="text-lg sm:text-xl font-bold text-white font-display tracking-tight leading-snug">
                           {action.title}
                         </h3>
 
                         {/* 3. Operational Diagnostic Finding */}
-                        <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800/90 space-y-1.5">
-                          <div className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <div className="p-4 sm:p-5 rounded-xl bg-slate-950/80 border border-slate-800/90 space-y-2">
+                          <div className="text-xs font-bold uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
                             <Info className="w-4 h-4 text-blue-400 shrink-0" />
                             <span>Executive Finding & Synthesis:</span>
                           </div>
-                          <p className="text-sm sm:text-base text-slate-200 leading-relaxed font-normal">
+                          <p className="text-sm sm:text-[15px] text-slate-100 leading-relaxed font-normal">
                             {action.finding}
                           </p>
                         </div>
 
                         {/* 4. Projected Bottom-Line Financial Impact Box */}
-                        <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner">
-                          <div className="space-y-1">
+                        <div className="p-4 sm:p-5 rounded-xl bg-emerald-950/30 border border-emerald-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-inner">
+                          <div className="space-y-1.5">
                             <div className="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
                               <TrendingUp className="w-4 h-4 text-emerald-400 shrink-0" />
                               <span>Projected Financial & Operational Benefit:</span>
                             </div>
-                            <div className="text-sm sm:text-base text-emerald-100 font-medium leading-relaxed">
+                            <div className="text-sm sm:text-[15px] text-emerald-100 font-medium leading-relaxed">
                               {action.expectedFinancialImpact}
                             </div>
                           </div>
                           <div className="text-left sm:text-right shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-emerald-800/40">
-                            <div className="text-xl sm:text-2xl font-black font-mono text-emerald-300 tracking-tight">
+                            <div className="text-2xl sm:text-3xl font-black font-mono text-emerald-300 tracking-tight">
                               {action.impactMetric || (action.annualEbitdaImpact ? `+$${action.annualEbitdaImpact.toLocaleString()} / yr` : 'High Value')}
                             </div>
                             <div className="text-xs text-emerald-400/90 font-semibold uppercase tracking-wider">
@@ -768,39 +768,39 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                               e.stopPropagation();
                               toggleExpandAction(action.id);
                             }}
-                            className="w-full py-2.5 px-3.5 rounded-xl bg-slate-950/60 hover:bg-slate-950 border border-slate-800/80 text-xs font-bold text-slate-300 hover:text-slate-100 transition-colors flex items-center justify-between"
+                            className="w-full py-3 px-4 rounded-xl bg-slate-950/70 hover:bg-slate-950 border border-slate-800 text-xs sm:text-sm font-bold text-slate-200 hover:text-white transition-colors flex items-center justify-between"
                           >
                             <span className="flex items-center gap-2">
                               <CheckCircle2 className="w-4 h-4 text-blue-400" />
                               <span>Execution Blueprint & Root Cause Remediation</span>
                             </span>
                             {isExpanded ? (
-                              <ChevronUp className="w-4 h-4 text-slate-400" />
+                              <ChevronUp className="w-4 h-4 text-slate-300" />
                             ) : (
-                              <ChevronDown className="w-4 h-4 text-slate-400" />
+                              <ChevronDown className="w-4 h-4 text-slate-300" />
                             )}
                           </button>
 
                           {isExpanded && (
                             <div className="space-y-3 pt-1 animate-in fade-in duration-200">
                               {/* Root Cause Container */}
-                              <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-800/40 space-y-1.5">
+                              <div className="p-4 sm:p-5 rounded-xl bg-amber-950/20 border border-amber-800/50 space-y-1.5">
                                 <div className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
                                   <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
                                   <span>Identified Cross-Silo Root Cause:</span>
                                 </div>
-                                <p className="text-sm text-slate-200 leading-relaxed font-normal">
+                                <p className="text-sm sm:text-[15px] text-slate-100 leading-relaxed font-normal">
                                   {action.rootCause}
                                 </p>
                               </div>
 
                               {/* Concrete Implementation Container */}
-                              <div className="p-4 rounded-xl bg-blue-950/20 border border-blue-800/40 space-y-1.5">
+                              <div className="p-4 sm:p-5 rounded-xl bg-blue-950/20 border border-blue-800/50 space-y-1.5">
                                 <div className="text-xs font-bold uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
                                   <Target className="w-4 h-4 text-blue-400 shrink-0" />
                                   <span>Concrete Executive Implementation Mandate:</span>
                                 </div>
-                                <p className="text-sm text-slate-200 leading-relaxed font-medium">
+                                <p className="text-sm sm:text-[15px] text-slate-100 leading-relaxed font-medium">
                                   {action.concreteAction}
                                 </p>
                               </div>
@@ -809,14 +809,14 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                         </div>
 
                         {/* 6. Card Footer: Leadership Governance */}
-                        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-800/80 text-xs text-slate-300">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-slate-400">Accountable Leadership:</span>
-                            <span className="font-semibold text-slate-100">
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-3.5 border-t border-slate-800/80 text-xs sm:text-sm text-slate-300">
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-400 font-medium">Accountable Leadership:</span>
+                            <span className="font-semibold text-white">
                               {action.responsibleRole}
                             </span>
                           </div>
-                          <span className="px-3 py-1 rounded-full text-xs font-semibold bg-slate-950 border border-slate-800 text-slate-300 capitalize flex items-center gap-1.5">
+                          <span className="px-3 py-1 rounded-full text-xs font-semibold bg-slate-950 border border-slate-800 text-slate-200 capitalize flex items-center gap-1.5">
                             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                             <span>Status: {action.status.replace('_', ' ')}</span>
                           </span>
@@ -833,7 +833,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5">
                     <ShieldAlert className="w-5 h-5 text-amber-400" />
-                    <h3 className="text-base sm:text-lg font-black text-slate-100 font-display">
+                    <h3 className="text-lg sm:text-xl font-bold text-white font-display">
                       Cross-Department Risk Radar
                     </h3>
                   </div>
@@ -849,7 +849,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                   {analysis.crossDepartmentRisks.map((risk) => (
                     <div
                       key={risk.id}
-                      className="p-4 sm:p-5 rounded-xl bg-slate-950/80 border border-slate-800/90 space-y-3 hover:border-slate-700/80 transition-colors shadow-md"
+                      className="p-4 sm:p-5 rounded-xl bg-slate-950/85 border border-slate-800/90 space-y-3 hover:border-slate-700 transition-colors shadow-md"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="space-y-1">
@@ -862,7 +862,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                               {risk.severity} Risk
                             </span>
                           </div>
-                          <h4 className="text-sm sm:text-base font-bold text-slate-100 pt-1">
+                          <h4 className="text-sm sm:text-base font-bold text-white pt-1">
                             {risk.title}
                           </h4>
                         </div>
@@ -871,21 +871,21 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                         </span>
                       </div>
 
-                      <p className="text-sm text-slate-300 leading-relaxed font-normal">
+                      <p className="text-sm text-slate-200 leading-relaxed font-normal">
                         {risk.evidence}
                       </p>
 
-                      <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800/90 space-y-1">
+                      <div className="p-3.5 rounded-xl bg-slate-900/95 border border-slate-800 space-y-1.5">
                         <div className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
                           <Zap className="w-3.5 h-3.5 text-amber-400" />
                           <span>Recommended Executive Intervention:</span>
                         </div>
-                        <p className="text-sm text-slate-200 leading-relaxed font-medium">
+                        <p className="text-sm text-slate-100 leading-relaxed font-medium">
                           {risk.recommendedIntervention}
                         </p>
                       </div>
 
-                      <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-800/80 text-slate-400">
+                      <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-800/80 text-slate-300">
                         <span className="font-medium">Departments Involved:</span>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           {risk.departments.map((dept, i) => (
@@ -894,7 +894,7 @@ export const Company360View: React.FC<Company360ViewProps> = ({
                                 {dept}
                               </span>
                               {i < risk.departments.length - 1 && (
-                                <span className="text-slate-500 font-bold">↔</span>
+                                <span className="text-slate-400 font-bold">↔</span>
                               )}
                             </React.Fragment>
                           ))}

@@ -91,13 +91,8 @@ class ClientAnalyticsEngine {
       }
     }
 
-    // Fall back to active dataset if available
-    const active = this.getActiveDataset();
-    if (active) return active;
-
-    // Auto-bootstrap sample dataset if client storage is empty or requested dataset is missing
-    this.initSampleDataset(id);
-    return this.getActiveDataset();
+    // If a specific non-active dataset ID was requested but not found, DO NOT silently fall back or bootstrap
+    return null;
   }
 
   public listDatasets(): {

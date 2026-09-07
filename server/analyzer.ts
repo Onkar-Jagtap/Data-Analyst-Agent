@@ -42,8 +42,18 @@ function applyFilters(rows: Record<string, any>[], filters?: FilterCondition[]):
   const initialCount = rows.length;
   const filtered = rows.filter(row => {
     for (const f of filters) {
+      if (!f || !f.column) continue;
       const val = row[f.column];
-      if (val === undefined) continue;
+
+      const isValEmpty = isNullOrEmpty(val);
+      const isTargetEmpty = isNullOrEmpty(f.value);
+
+      if (isValEmpty) {
+        if (f.operator === '!=' && !isTargetEmpty) {
+          continue; // row passes val != target
+        }
+        return false; // missing/null cannot satisfy equality, magnitude, or substring operations
+      }
 
       const numParsed = parseCleanNumber(val);
       const targetNum = parseCleanNumber(f.value);
@@ -53,14 +63,14 @@ function applyFilters(rows: Record<string, any>[], filters?: FilterCondition[]):
           if (numParsed.isNum && targetNum.isNum) {
             if (numParsed.value !== targetNum.value) return false;
           } else {
-            if (String(val).toLowerCase() !== String(f.value).toLowerCase()) return false;
+            if (String(val).toLowerCase().trim() !== String(f.value).toLowerCase().trim()) return false;
           }
           break;
         case '!=':
           if (numParsed.isNum && targetNum.isNum) {
             if (numParsed.value === targetNum.value) return false;
           } else {
-            if (String(val).toLowerCase() === String(f.value).toLowerCase()) return false;
+            if (String(val).toLowerCase().trim() === String(f.value).toLowerCase().trim()) return false;
           }
           break;
         case '>':
@@ -76,7 +86,7 @@ function applyFilters(rows: Record<string, any>[], filters?: FilterCondition[]):
           if (!numParsed.isNum || !targetNum.isNum || numParsed.value > targetNum.value) return false;
           break;
         case 'contains':
-          if (!String(val).toLowerCase().includes(String(f.value).toLowerCase())) return false;
+          if (!String(val).toLowerCase().includes(String(f.value).toLowerCase().trim())) return false;
           break;
         case 'date_range': {
           const rowDate = parseDateSafe(val);
@@ -89,8 +99,8 @@ function applyFilters(rows: Record<string, any>[], filters?: FilterCondition[]):
         }
         case 'in':
           if (Array.isArray(f.value)) {
-            const strVal = String(val).toLowerCase();
-            const match = f.value.some((item: any) => String(item).toLowerCase() === strVal);
+            const strVal = String(val).toLowerCase().trim();
+            const match = f.value.some((item: any) => String(item).toLowerCase().trim() === strVal);
             if (!match) return false;
           }
           break;
@@ -227,7 +237,46 @@ export function executeAnalysisPlan(
     };
   }
 
-  // 1. Apply user filters first
+  // 1. Strict Schema Validation & Column Resolution on Filters
+  if (plan.filters && plan.filters.length > 0) {
+    for (const f of plan.filters) {
+      if (!f || !f.column) continue;
+      const colRes = resolveColumn(f.column, profile.columns);
+      if (colRes.status === 'not_found') {
+        return {
+          success: false,
+          operation: plan.operation,
+          data: null,
+          summaryMetrics: [],
+          methodDescription: `Filter column '${f.column}' does not exist in dataset.`,
+          dataHandling: {
+            totalRows,
+            validRowsAnalyzed: 0,
+            excludedRows: totalRows,
+            missingValuesExcluded: 0,
+            invalidValuesExcluded: 0,
+            filteredOutRows: 0,
+            methodDescription: `Filter column '${f.column}' does not exist`,
+            rulesApplied: ['Schema Validation: Unknown filter column rejected'],
+            warnings: [`Filter column '${f.column}' is not part of this dataset.`],
+            confidenceScore: 0,
+            isDeterministic: true,
+          },
+          warnings: [`Filter column '${f.column}' does not exist.`],
+          error: {
+            code: 'INVALID_FILTER_COLUMN',
+            message: `The filter column '${f.column}' was not found in dataset '${profile.filename}'.`,
+            reason: `Cannot filter on non-existent column '${f.column}'.`,
+            suggestion: `Available columns are: ${profile.columns.map(c => c.name).join(', ')}.`,
+          },
+        };
+      } else if (colRes.column) {
+        f.column = colRes.column.name;
+      }
+    }
+  }
+
+  // 2. Apply user filters
   const { filteredRows, filteredOutCount } = applyFilters(rawRows, plan.filters);
   if (filteredOutCount > 0) {
     rulesApplied.push(`Applied filters: excluded ${filteredOutCount} records`);
@@ -924,7 +973,7 @@ export function calculateCorrelationMatrix(
     .slice(0, 12);
 
   if (numericCols.length < 2) {
-    return { columns: numericCols, matrix: [] };
+    return { columns: numericCols, matrix: [], undefinedDetails: [] };
   }
 
   const colData: Record<string, number[]> = {};
@@ -939,9 +988,11 @@ export function calculateCorrelationMatrix(
     }
   }
 
-  const matrix: number[][] = [];
+  const matrix: (number | null)[][] = [];
+  const undefinedDetails: { col1: string; col2: string; reason: string }[] = [];
+
   for (let i = 0; i < numericCols.length; i++) {
-    const rowCorr: number[] = [];
+    const rowCorr: (number | null)[] = [];
     const colA = numericCols[i];
     const valsA = colData[colA];
 
@@ -961,7 +1012,12 @@ export function calculateCorrelationMatrix(
       }
 
       if (validPairs.length < 3) {
-        rowCorr.push(0);
+        rowCorr.push(null);
+        undefinedDetails.push({
+          col1: colA,
+          col2: colB,
+          reason: 'Insufficient valid numeric pairs (< 3 pairs)',
+        });
         continue;
       }
 
@@ -983,6 +1039,14 @@ export function calculateCorrelationMatrix(
       const denom = Math.sqrt(denomA * denomB);
       if (denom === 0 || isNaN(denom)) {
         rowCorr.push(0);
+        const zeroVarCols: string[] = [];
+        if (denomA === 0) zeroVarCols.push(colA);
+        if (denomB === 0) zeroVarCols.push(colB);
+        undefinedDetails.push({
+          col1: colA,
+          col2: colB,
+          reason: `Zero variance in ${zeroVarCols.join(' and ')}; Pearson correlation is mathematically undefined (represented as 0 with note).`,
+        });
       } else {
         const r = Math.max(-1, Math.min(1, num / denom));
         rowCorr.push(Math.round(r * 100) / 100);
@@ -991,7 +1055,7 @@ export function calculateCorrelationMatrix(
     matrix.push(rowCorr);
   }
 
-  return { columns: numericCols, matrix };
+  return { columns: numericCols, matrix, undefinedDetails };
 }
 
 // Outlier Root-Cause Drill-Down

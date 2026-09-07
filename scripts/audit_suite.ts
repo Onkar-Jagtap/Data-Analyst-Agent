@@ -10,6 +10,7 @@ import { datasetStore } from '../server/dataset_store.js';
 import {
   resolveColumn,
   resolveMetricFromQuery,
+  resolveDimensionFromQuery,
   resolveAggregation,
   validateAndRepairPlan,
   applyFollowUpContext,
@@ -699,175 +700,8 @@ async function runAudit() {
   });
 
   // ============================================================================
-  // AI QUERY ENGINE REGRESSION TEST SUITE (Priority 6)
+  // SYNTHETIC MULTI-DOMAIN PROFILES FOR RESOLUTION & SUGGESTION AUDITS
   // ============================================================================
-  console.log('\n[AI Query Engine Audit] Testing deterministic query resolution, ambiguity prevention, follow-ups, and safe execution');
-
-  recordTest('AI Query - Metric Synonyms', 'Maps semantic terms like sales, margin, volume to dataset columns', () => {
-    const resSales = resolveMetricFromQuery('total sales', sampleProfile.columns);
-    if (!resSales.column || resSales.column.name !== 'Revenue') {
-      throw new Error(`Expected 'total sales' to map to 'Revenue', got '${resSales.column?.name}'`);
-    }
-
-    const resMargin = resolveMetricFromQuery('average margin', sampleProfile.columns);
-    if (!resMargin.column || resMargin.column.name !== 'Profit') {
-      throw new Error(`Expected 'average margin' to map to 'Profit', got '${resMargin.column?.name}'`);
-    }
-
-    const resQty = resolveMetricFromQuery('units sold count', sampleProfile.columns);
-    if (!resQty.column || resQty.column.name !== 'Quantity') {
-      throw new Error(`Expected 'units sold' to map to 'Quantity', got '${resQty.column?.name}'`);
-    }
-
-    const resCost = resolveMetricFromQuery('total expenses', sampleProfile.columns);
-    if (!resCost.column || resCost.column.name !== 'Cost') {
-      throw new Error(`Expected 'total expenses' to map to 'Cost', got '${resCost.column?.name}'`);
-    }
-  });
-
-  recordTest('AI Query - Deterministic Intent Planning', 'Correctly plans group_aggregate, ranking, time_series, and correlation', () => {
-    // 1. Group Aggregate
-    const p1 = parseIntentDeterministic('What is total sales by region?', sampleProfile);
-    if (p1.operation !== 'group_aggregate') throw new Error(`Expected group_aggregate, got ${p1.operation}`);
-    if (p1.metric !== 'Revenue') throw new Error(`Expected Revenue metric, got ${p1.metric}`);
-    if (!p1.group_by || !p1.group_by.includes('Region')) throw new Error(`Expected Region group, got ${p1.group_by}`);
-    if (p1.aggregation !== 'sum') throw new Error(`Expected sum aggregation, got ${p1.aggregation}`);
-
-    // 2. Ranking
-    const p2 = parseIntentDeterministic('Top 5 products by profit', sampleProfile);
-    if (p2.operation !== 'ranking') throw new Error(`Expected ranking, got ${p2.operation}`);
-    if (p2.metric !== 'Profit') throw new Error(`Expected Profit metric, got ${p2.metric}`);
-    if (p2.limit !== 5) throw new Error(`Expected limit 5, got ${p2.limit}`);
-
-    // 3. Time Series
-    const p3 = parseIntentDeterministic('Monthly sales trend', sampleProfile);
-    if (p3.operation !== 'time_series') throw new Error(`Expected time_series, got ${p3.operation}`);
-    if (p3.metric !== 'Revenue') throw new Error(`Expected Revenue metric, got ${p3.metric}`);
-    if (p3.time_granularity !== 'monthly') throw new Error(`Expected monthly granularity, got ${p3.time_granularity}`);
-
-    // 4. Correlation
-    const p4 = parseIntentDeterministic('Correlation between revenue and cost', sampleProfile);
-    if (p4.operation !== 'correlation') throw new Error(`Expected correlation, got ${p4.operation}`);
-    if (p4.metric !== 'Revenue') throw new Error(`Expected Revenue primary metric, got ${p4.metric}`);
-    if (p4.secondary_metric !== 'Cost') throw new Error(`Expected Cost secondary metric, got ${p4.secondary_metric}`);
-  });
-
-  recordTest('AI Query - Ambiguity Prevention', 'Never guesses arbitrary columns when metric is ambiguous or missing', () => {
-    // Generic query without metric
-    const pAmbiguous = parseIntentDeterministic('What is the total?', sampleProfile);
-    if (pAmbiguous.operation !== 'clarification') {
-      throw new Error(`Expected clarification for ambiguous query, but system guessed: ${pAmbiguous.operation} of ${pAmbiguous.metric}`);
-    }
-
-    // Breakdown without metric
-    const pNoMetric = parseIntentDeterministic('Breakdown by region', sampleProfile);
-    if (pNoMetric.operation !== 'clarification') {
-      throw new Error(`Expected clarification for missing metric, but system guessed: ${pNoMetric.operation} of ${pNoMetric.metric}`);
-    }
-
-    // Completely nonexistent column
-    const pUnknown = parseIntentDeterministic('Show total for nonexistent_metric_xyz', sampleProfile);
-    if (pUnknown.operation !== 'clarification') {
-      throw new Error(`Expected clarification for unknown metric, but system guessed: ${pUnknown.operation}`);
-    }
-  });
-
-  recordTest('AI Query - Safe Failure Execution', 'Clarification and ambiguous plans halt safely with actionable error', () => {
-    const clarificationPlan = {
-      operation: 'clarification' as any,
-      user_intent_summary: 'Which metric would you like to analyze: Revenue, Profit, Discount, Quantity?',
-    };
-
-    const res = executeAnalysisPlan(sampleRows, sampleProfile, clarificationPlan);
-    if (res.success !== false) throw new Error('Clarification plan should return success: false');
-    if (res.error?.code !== 'CLARIFICATION_REQUIRED') throw new Error(`Expected CLARIFICATION_REQUIRED code, got ${res.error?.code}`);
-    if (!res.error?.suggestion) throw new Error('Expected actionable suggestion for clarification');
-    if (res.dataHandling.validRowsAnalyzed !== 0) throw new Error('Clarification plan must analyze 0 rows');
-  });
-
-  recordTest('AI Query - Multi-Turn Context & Refinements', 'Applies follow-up context overrides correctly', () => {
-    const initialPlan = {
-      operation: 'group_aggregate' as const,
-      metric: 'Revenue',
-      group_by: ['Region'],
-      aggregation: 'sum' as const,
-      limit: 10,
-    };
-
-    // 1. Refine limit ("only the top 3")
-    const dummy1 = { ...initialPlan };
-    const refinedLimit = applyFollowUpContext('only the top 3', dummy1, initialPlan, sampleProfile);
-    if (refinedLimit.limit !== 3) throw new Error(`Expected limit 3, got ${refinedLimit.limit}`);
-    if (refinedLimit.metric !== 'Revenue') throw new Error(`Expected Revenue metric retained, got ${refinedLimit.metric}`);
-    if (refinedLimit.group_by?.[0] !== 'Region') throw new Error(`Expected Region retained, got ${refinedLimit.group_by?.[0]}`);
-
-    // 2. Switch metric ("now do profit")
-    const dummy2 = { ...initialPlan };
-    const refinedMetric = applyFollowUpContext('now do profit', dummy2, initialPlan, sampleProfile);
-    if (refinedMetric.metric !== 'Profit') throw new Error(`Expected Profit metric, got ${refinedMetric.metric}`);
-    if (refinedMetric.group_by?.[0] !== 'Region') throw new Error(`Expected Region retained, got ${refinedMetric.group_by?.[0]}`);
-
-    // 3. Switch to time trend ("now monthly over time")
-    const dummy3 = { ...initialPlan };
-    const refinedTrend = applyFollowUpContext('now monthly trend over time', dummy3, initialPlan, sampleProfile);
-    if (refinedTrend.operation !== 'time_series') throw new Error(`Expected time_series operation, got ${refinedTrend.operation}`);
-    if (refinedTrend.time_granularity !== 'monthly') throw new Error(`Expected monthly granularity, got ${refinedTrend.time_granularity}`);
-    if (refinedTrend.metric !== 'Revenue') throw new Error(`Expected Revenue retained, got ${refinedTrend.metric}`);
-  });
-
-  recordTest('AI Query - Plan Validation & Repair', 'Validates plan schema and prevents non-numeric aggregation', () => {
-    // Lowercase metric repaired to exact casing
-    const rawPlan1 = {
-      operation: 'aggregate' as const,
-      metric: 'revenue',
-      aggregation: 'sum' as const,
-    };
-    const val1 = validateAndRepairPlan(rawPlan1, sampleProfile, 'what is revenue');
-    if (!val1.valid) throw new Error('Expected valid repair for lowercase revenue');
-    if (val1.repairedPlan.metric !== 'Revenue') throw new Error(`Expected exact casing 'Revenue', got '${val1.repairedPlan.metric}'`);
-
-    // Non-numeric column sum rejected safely
-    const rawPlan2 = {
-      operation: 'aggregate' as const,
-      metric: 'Region',
-      aggregation: 'sum' as const,
-    };
-    const val2 = validateAndRepairPlan(rawPlan2, sampleProfile, 'sum of region');
-    if (val2.valid) throw new Error('Expected invalid validation when summing categorical Region');
-    if (val2.error?.code !== 'NON_NUMERIC_METRIC') throw new Error(`Expected NON_NUMERIC_METRIC, got ${val2.error?.code}`);
-  });
-
-  recordTest('AI Query - Deterministic Math Execution', 'Pure TypeScript deterministic calculation produces exact results', () => {
-    const plan = {
-      operation: 'group_aggregate' as const,
-      metric: 'Revenue',
-      group_by: ['Region'],
-      aggregation: 'sum' as const,
-      limit: 10,
-    };
-
-    const res = executeAnalysisPlan(sampleRows, sampleProfile, plan);
-    if (!res.success) throw new Error('Analysis failed: ' + res.error?.message);
-    if (!res.data || !Array.isArray(res.data.items) || res.data.items.length === 0) {
-      throw new Error('Analysis produced empty items array');
-    }
-    if (!res.dataHandling.isDeterministic) throw new Error('Execution was not marked deterministic');
-    if (res.dataHandling.validRowsAnalyzed <= 0) throw new Error('Valid rows analyzed must be > 0');
-
-    // Verify every value is a real finite number
-    for (const item of res.data.items) {
-      if (typeof item.value !== 'number' || isNaN(item.value) || !isFinite(item.value)) {
-        throw new Error(`Invalid non-finite number calculated for ${item.category}: ${item.value}`);
-      }
-    }
-  });
-
-  // ============================================================================
-  // AUDIT: AI-GENERATED SUGGESTED QUESTIONS (REGRESSION & VALIDATION SUITE)
-  // ============================================================================
-  console.log('\n[Suggested Questions Audit] Testing dataset-grounded suggestions, domain inference, validation layer, and regression cases');
-
-  // Synthetic Test Dataset Profiles
   const votingProfile: any = {
     id: 'voting-dataset-test',
     filename: 'election_sentiment_2024.csv',
@@ -1050,6 +884,263 @@ async function runAudit() {
       },
     ],
   };
+
+  // ============================================================================
+  // AI QUERY ENGINE REGRESSION TEST SUITE (Priority 6)
+  // ============================================================================
+  console.log('\n[AI Query Engine Audit] Testing deterministic query resolution, ambiguity prevention, follow-ups, and safe execution');
+
+  recordTest('AI Query - Metric Synonyms', 'Maps semantic terms like sales, margin, volume to dataset columns', () => {
+    const resSales = resolveMetricFromQuery('total sales', sampleProfile.columns);
+    if (!resSales.column || resSales.column.name !== 'Revenue') {
+      throw new Error(`Expected 'total sales' to map to 'Revenue', got '${resSales.column?.name}'`);
+    }
+
+    const resMargin = resolveMetricFromQuery('average margin', sampleProfile.columns);
+    if (!resMargin.column || resMargin.column.name !== 'Profit') {
+      throw new Error(`Expected 'average margin' to map to 'Profit', got '${resMargin.column?.name}'`);
+    }
+
+    const resQty = resolveMetricFromQuery('units sold count', sampleProfile.columns);
+    if (!resQty.column || resQty.column.name !== 'Quantity') {
+      throw new Error(`Expected 'units sold' to map to 'Quantity', got '${resQty.column?.name}'`);
+    }
+
+    const resCost = resolveMetricFromQuery('total expenses', sampleProfile.columns);
+    if (!resCost.column || resCost.column.name !== 'Cost') {
+      throw new Error(`Expected 'total expenses' to map to 'Cost', got '${resCost.column?.name}'`);
+    }
+  });
+
+  recordTest('AI Query - Deterministic Intent Planning', 'Correctly plans group_aggregate, ranking, time_series, and correlation', () => {
+    // 1. Group Aggregate
+    const p1 = parseIntentDeterministic('What is total sales by region?', sampleProfile);
+    if (p1.operation !== 'group_aggregate') throw new Error(`Expected group_aggregate, got ${p1.operation}`);
+    if (p1.metric !== 'Revenue') throw new Error(`Expected Revenue metric, got ${p1.metric}`);
+    if (!p1.group_by || !p1.group_by.includes('Region')) throw new Error(`Expected Region group, got ${p1.group_by}`);
+    if (p1.aggregation !== 'sum') throw new Error(`Expected sum aggregation, got ${p1.aggregation}`);
+
+    // 2. Ranking
+    const p2 = parseIntentDeterministic('Top 5 products by profit', sampleProfile);
+    if (p2.operation !== 'ranking') throw new Error(`Expected ranking, got ${p2.operation}`);
+    if (p2.metric !== 'Profit') throw new Error(`Expected Profit metric, got ${p2.metric}`);
+    if (p2.limit !== 5) throw new Error(`Expected limit 5, got ${p2.limit}`);
+
+    // 3. Time Series
+    const p3 = parseIntentDeterministic('Monthly sales trend', sampleProfile);
+    if (p3.operation !== 'time_series') throw new Error(`Expected time_series, got ${p3.operation}`);
+    if (p3.metric !== 'Revenue') throw new Error(`Expected Revenue metric, got ${p3.metric}`);
+    if (p3.time_granularity !== 'monthly') throw new Error(`Expected monthly granularity, got ${p3.time_granularity}`);
+
+    // 4. Correlation
+    const p4 = parseIntentDeterministic('Correlation between revenue and cost', sampleProfile);
+    if (p4.operation !== 'correlation') throw new Error(`Expected correlation, got ${p4.operation}`);
+    if (p4.metric !== 'Revenue') throw new Error(`Expected Revenue primary metric, got ${p4.metric}`);
+    if (p4.secondary_metric !== 'Cost') throw new Error(`Expected Cost secondary metric, got ${p4.secondary_metric}`);
+  });
+
+  recordTest('AI Query - Ambiguity Prevention', 'Never guesses arbitrary columns when metric is ambiguous or missing', () => {
+    // Generic query without metric
+    const pAmbiguous = parseIntentDeterministic('What is the total?', sampleProfile);
+    if (pAmbiguous.operation !== 'clarification') {
+      throw new Error(`Expected clarification for ambiguous query, but system guessed: ${pAmbiguous.operation} of ${pAmbiguous.metric}`);
+    }
+
+    // Breakdown without metric
+    const pNoMetric = parseIntentDeterministic('Breakdown by region', sampleProfile);
+    if (pNoMetric.operation !== 'clarification') {
+      throw new Error(`Expected clarification for missing metric, but system guessed: ${pNoMetric.operation} of ${pNoMetric.metric}`);
+    }
+
+    // Completely nonexistent column
+    const pUnknown = parseIntentDeterministic('Show total for nonexistent_metric_xyz', sampleProfile);
+    if (pUnknown.operation !== 'clarification') {
+      throw new Error(`Expected clarification for unknown metric, but system guessed: ${pUnknown.operation}`);
+    }
+  });
+
+  recordTest('AI Query - Safe Failure Execution', 'Clarification and ambiguous plans halt safely with actionable error', () => {
+    const clarificationPlan = {
+      operation: 'clarification' as any,
+      user_intent_summary: 'Which metric would you like to analyze: Revenue, Profit, Discount, Quantity?',
+    };
+
+    const res = executeAnalysisPlan(sampleRows, sampleProfile, clarificationPlan);
+    if (res.success !== false) throw new Error('Clarification plan should return success: false');
+    if (res.error?.code !== 'CLARIFICATION_REQUIRED') throw new Error(`Expected CLARIFICATION_REQUIRED code, got ${res.error?.code}`);
+    if (!res.error?.suggestion) throw new Error('Expected actionable suggestion for clarification');
+    if (res.dataHandling.validRowsAnalyzed !== 0) throw new Error('Clarification plan must analyze 0 rows');
+  });
+
+  recordTest('AI Query - Multi-Turn Context & Refinements', 'Applies follow-up context overrides correctly', () => {
+    const initialPlan = {
+      operation: 'group_aggregate' as const,
+      metric: 'Revenue',
+      group_by: ['Region'],
+      aggregation: 'sum' as const,
+      limit: 10,
+    };
+
+    // 1. Refine limit ("only the top 3")
+    const dummy1 = { ...initialPlan };
+    const refinedLimit = applyFollowUpContext('only the top 3', dummy1, initialPlan, sampleProfile);
+    if (refinedLimit.limit !== 3) throw new Error(`Expected limit 3, got ${refinedLimit.limit}`);
+    if (refinedLimit.metric !== 'Revenue') throw new Error(`Expected Revenue metric retained, got ${refinedLimit.metric}`);
+    if (refinedLimit.group_by?.[0] !== 'Region') throw new Error(`Expected Region retained, got ${refinedLimit.group_by?.[0]}`);
+
+    // 2. Switch metric ("now do profit")
+    const dummy2 = { ...initialPlan };
+    const refinedMetric = applyFollowUpContext('now do profit', dummy2, initialPlan, sampleProfile);
+    if (refinedMetric.metric !== 'Profit') throw new Error(`Expected Profit metric, got ${refinedMetric.metric}`);
+    if (refinedMetric.group_by?.[0] !== 'Region') throw new Error(`Expected Region retained, got ${refinedMetric.group_by?.[0]}`);
+
+    // 3. Switch to time trend ("now monthly over time")
+    const dummy3 = { ...initialPlan };
+    const refinedTrend = applyFollowUpContext('now monthly trend over time', dummy3, initialPlan, sampleProfile);
+    if (refinedTrend.operation !== 'time_series') throw new Error(`Expected time_series operation, got ${refinedTrend.operation}`);
+    if (refinedTrend.time_granularity !== 'monthly') throw new Error(`Expected monthly granularity, got ${refinedTrend.time_granularity}`);
+    if (refinedTrend.metric !== 'Revenue') throw new Error(`Expected Revenue retained, got ${refinedTrend.metric}`);
+  });
+
+  recordTest('AI Query - Plan Validation & Repair', 'Validates plan schema and prevents non-numeric aggregation', () => {
+    // Lowercase metric repaired to exact casing
+    const rawPlan1 = {
+      operation: 'aggregate' as const,
+      metric: 'revenue',
+      aggregation: 'sum' as const,
+    };
+    const val1 = validateAndRepairPlan(rawPlan1, sampleProfile, 'what is revenue');
+    if (!val1.valid) throw new Error('Expected valid repair for lowercase revenue');
+    if (val1.repairedPlan.metric !== 'Revenue') throw new Error(`Expected exact casing 'Revenue', got '${val1.repairedPlan.metric}'`);
+
+    // Non-numeric column sum rejected safely
+    const rawPlan2 = {
+      operation: 'aggregate' as const,
+      metric: 'Region',
+      aggregation: 'sum' as const,
+    };
+    const val2 = validateAndRepairPlan(rawPlan2, sampleProfile, 'sum of region');
+    if (val2.valid) throw new Error('Expected invalid validation when summing categorical Region');
+    if (val2.error?.code !== 'NON_NUMERIC_METRIC') throw new Error(`Expected NON_NUMERIC_METRIC, got ${val2.error?.code}`);
+  });
+
+  recordTest('AI Query - Deterministic Math Execution', 'Pure TypeScript deterministic calculation produces exact results', () => {
+    const plan = {
+      operation: 'group_aggregate' as const,
+      metric: 'Revenue',
+      group_by: ['Region'],
+      aggregation: 'sum' as const,
+      limit: 10,
+    };
+
+    const res = executeAnalysisPlan(sampleRows, sampleProfile, plan);
+    if (!res.success) throw new Error('Analysis failed: ' + res.error?.message);
+    if (!res.data || !Array.isArray(res.data.items) || res.data.items.length === 0) {
+      throw new Error('Analysis produced empty items array');
+    }
+    if (!res.dataHandling.isDeterministic) throw new Error('Execution was not marked deterministic');
+    if (res.dataHandling.validRowsAnalyzed <= 0) throw new Error('Valid rows analyzed must be > 0');
+
+    // Verify every value is a real finite number
+    for (const item of res.data.items) {
+      if (typeof item.value !== 'number' || isNaN(item.value) || !isFinite(item.value)) {
+        throw new Error(`Invalid non-finite number calculated for ${item.category}: ${item.value}`);
+      }
+    }
+  });
+
+  recordTest('AI Query - Domain-Aware Semantic Resolution', 'Respects dataset domain for ambiguous synonyms and dimensions', () => {
+    // 1. In Sales domain, 'turnover' maps to Revenue
+    const salesTurnover = resolveMetricFromQuery('total turnover', sampleProfile.columns, undefined, { domain: 'ecommerce_sales' });
+    if (salesTurnover.metric !== 'Revenue') {
+      throw new Error(`Expected 'turnover' in sales domain to resolve to 'Revenue', got '${salesTurnover.metric}'`);
+    }
+
+    // 2. In HR domain, 'turnover' does NOT resolve to Revenue
+    const hrTurnover = resolveMetricFromQuery('turnover rate', hrProfile.columns, undefined, { domain: 'hr_workforce' });
+    if (hrTurnover.metric === 'Revenue') {
+      throw new Error(`'turnover' in HR workforce domain must not resolve to 'Revenue'`);
+    }
+
+    // 3. Dimension resolution using domain synonyms
+    const dimSales = resolveDimensionFromQuery('breakdown by territory', sampleProfile.columns, { domain: 'ecommerce_sales' });
+    if (!dimSales.column || dimSales.column.name !== 'Region') {
+      throw new Error(`Expected 'by territory' to resolve to Region, got '${dimSales.column?.name}'`);
+    }
+
+    const dimHr = resolveDimensionFromQuery('analyze across department', hrProfile.columns, { domain: 'hr_workforce' });
+    if (!dimHr.column || dimHr.column.name !== 'Department') {
+      throw new Error(`Expected 'across department' to resolve to Department, got '${dimHr.column?.name}'`);
+    }
+  });
+
+  recordTest('AI Query - Filter Schema Validation & Execution', 'Rejects non-existent filter columns and performs safe whitespace/casing normalization', () => {
+    // 1. Non-existent filter column rejected safely
+    const invalidFilterPlan = {
+      operation: 'group_aggregate' as const,
+      metric: 'Revenue',
+      group_by: ['Region'],
+      aggregation: 'sum' as const,
+      filters: [
+        { column: 'NonExistentColumnXYZ', operator: '==' as const, value: 'test' },
+      ],
+    };
+
+    const resInvalid = executeAnalysisPlan(sampleRows, sampleProfile, invalidFilterPlan);
+    if (resInvalid.success !== false) {
+      throw new Error('Expected execution to fail on non-existent filter column');
+    }
+    if (resInvalid.error?.code !== 'INVALID_FILTER_COLUMN') {
+      throw new Error(`Expected error code INVALID_FILTER_COLUMN, got ${resInvalid.error?.code}`);
+    }
+
+    // 2. Filter with whitespace trimming and case insensitivity
+    const whitespaceFilterPlan = {
+      operation: 'group_aggregate' as const,
+      metric: 'Revenue',
+      group_by: ['Region'],
+      aggregation: 'sum' as const,
+      filters: [
+        { column: 'Region', operator: '==' as const, value: '  north america  ' },
+      ],
+    };
+
+    const resFilter = executeAnalysisPlan(sampleRows, sampleProfile, whitespaceFilterPlan);
+    if (!resFilter.success) {
+      throw new Error('Filter with whitespace should succeed: ' + resFilter.error?.message);
+    }
+    if (!resFilter.data?.items || resFilter.data.items.length === 0) {
+      throw new Error('Filter matching "  north america  " should have found North America records');
+    }
+    for (const item of resFilter.data.items) {
+      if (item.category.toLowerCase() !== 'north america') {
+        throw new Error(`Filtered aggregate returned non-North America category: ${item.category}`);
+      }
+    }
+
+    // 3. Plan validation and repair for filter columns
+    const rawFilterPlan = {
+      operation: 'group_aggregate' as const,
+      metric: 'Revenue',
+      group_by: ['Region'],
+      aggregation: 'sum' as const,
+      filters: [
+        { column: 'region', operator: '==' as const, value: 'Europe' }, // lowercase 'region'
+      ],
+    };
+    const valFilter = validateAndRepairPlan(rawFilterPlan, sampleProfile, 'revenue in europe');
+    if (!valFilter.valid) {
+      throw new Error('Expected valid repair for lowercase filter column');
+    }
+    if (valFilter.repairedPlan.filters?.[0].column !== 'Region') {
+      throw new Error(`Expected repaired filter column 'Region', got '${valFilter.repairedPlan.filters?.[0].column}'`);
+    }
+  });
+
+  // ============================================================================
+  // AUDIT: AI-GENERATED SUGGESTED QUESTIONS (REGRESSION & VALIDATION SUITE)
+  // ============================================================================
+  console.log('\n[Suggested Questions Audit] Testing dataset-grounded suggestions, domain inference, validation layer, and regression cases');
 
   recordTest('Suggestions - Voting Sentiment Regression', 'Must NOT generate Revenue/Profit/Sales/Product and MUST ground in State/Candidate/Sentiment', () => {
     const mapping = detectDatasetDomain(votingProfile);
