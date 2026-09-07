@@ -99,6 +99,7 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({ profile }) => {
         <div className="flex items-center gap-2">
           <div className="flex items-center p-1 bg-slate-900 border border-slate-800 rounded-xl">
             <button
+              id="explorer-mode-table-btn"
               onClick={() => setActiveMode('table')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 activeMode === 'table'
@@ -110,6 +111,7 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({ profile }) => {
               <span>Table Inspector</span>
             </button>
             <button
+              id="explorer-mode-sql-btn"
               onClick={() => setActiveMode('sql')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 activeMode === 'sql'
@@ -123,6 +125,7 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({ profile }) => {
           </div>
 
           <button
+            id="explorer-export-csv-btn"
             onClick={() => downloadDatasetCsv(profile.id, profile.filename)}
             className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-medium text-slate-300 flex items-center gap-1.5 transition-colors shadow-sm"
             title="Download full audited dataset as CSV"
@@ -142,6 +145,7 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({ profile }) => {
             <form onSubmit={handleSearchSubmit} className="relative w-full sm:w-80">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
+                id="explorer-search-input"
                 type="text"
                 placeholder="Search records across all fields..."
                 value={search}

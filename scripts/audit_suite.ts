@@ -1508,6 +1508,151 @@ async function runAudit() {
   });
 
   // ============================================================================
+  // TEST SUITE 10: Session Isolation & Multi-Tenancy
+  // ============================================================================
+  console.log('\n[Security & Isolation] Testing session isolation and dataset segregation in dataset store');
+  recordTest('Session Isolation', 'Verifies datasets uploaded in Session A are not accessible in Session B', () => {
+    const sessionA = 'test-session-A-' + Date.now();
+    const sessionB = 'test-session-B-' + Date.now();
+
+    const dsA = datasetStore.addDataset(
+      sessionA,
+      'private_records_A.csv',
+      [{ secret_key: 'A123', value: 100 }]
+    );
+
+    const listB = datasetStore.listDatasets(sessionB);
+    const foundInB = listB.some(d => d.id === dsA.id || d.filename === 'private_records_A.csv');
+    if (foundInB) {
+      throw new Error('Data leakage detected: Session B can see datasets belonging to Session A');
+    }
+
+    const fetchedFromB = datasetStore.getDataset(sessionB, dsA.id);
+    if (fetchedFromB) {
+      throw new Error('Data leakage detected: Session B was able to fetch dataset object of Session A');
+    }
+  });
+
+  // ============================================================================
+  // TEST SUITE 11: Formula Sandbox & Code Injection Defense
+  // ============================================================================
+  console.log('\n[Security & Sandboxing] Testing formula sandbox defense against code injection');
+  recordTest('Formula Sandbox Defense', 'Blocks malicious expressions containing code injection or process calls', () => {
+    const testRows = [{ A: 10, B: 20 }];
+    const testProfile = profileDataset(testRows, 'test_math.csv', 'ds-math-01');
+
+    // 1. Malicious process access attempt
+    const maliciousAttempt1 = performTransformation(testRows, testProfile, {
+      action: 'calculated_column',
+      newColumnName: 'Hacked',
+      expression: 'process.exit(1)',
+    });
+    // Should result in null or safe fallback without throwing unhandled process error
+    if (maliciousAttempt1.transformedRows[0]['Hacked'] != null && maliciousAttempt1.transformedRows[0]['Hacked'] !== 0) {
+      throw new Error('Sandbox breached by process.exit call');
+    }
+
+    // 2. Malicious function constructor attempt
+    const maliciousAttempt2 = performTransformation(testRows, testProfile, {
+      action: 'calculated_column',
+      newColumnName: 'Hacked2',
+      expression: '(() => { return 999; })()',
+    });
+    if (maliciousAttempt2.transformedRows[0]['Hacked2'] === 999) {
+      throw new Error('Sandbox breached: custom function invocation executed');
+    }
+
+    // 3. Valid formula works correctly
+    const validFormula = performTransformation(testRows, testProfile, {
+      action: 'calculated_column',
+      newColumnName: 'Sum_AB',
+      expression: 'A + B',
+    });
+    if (validFormula.transformedRows[0]['Sum_AB'] !== 30) {
+      throw new Error(`Expected 30 from A + B, got: ${validFormula.transformedRows[0]['Sum_AB']}`);
+    }
+  });
+
+  // ============================================================================
+  // TEST SUITE 12: PII Detection & Anonymization Engine
+  // ============================================================================
+  console.log('\n[Privacy & PII] Testing PII detection and GDPR-compliant masking engine');
+  recordTest('PII Masking Engine', 'Detects emails and masks them safely during data cleaning', () => {
+    const piiRows = [
+      { User_ID: 'U1', Customer_Email: 'alice.smith@enterprise.com', Phone_Number: '+1-555-123-4567', Score: 85 },
+      { User_ID: 'U2', Customer_Email: 'bob.jones@corporate.org', Phone_Number: '+1-555-987-6543', Score: 92 },
+    ];
+    const piiProfile = profileDataset(piiRows, 'customer_contacts.csv', 'ds-pii-01');
+
+    // Verify PII detection in profiler
+    const piiSummary = piiProfile.piiSummary || [];
+    const hasEmail = piiSummary.some(p => p.category === 'email');
+    if (!hasEmail) {
+      throw new Error('Profiler failed to detect email PII category');
+    }
+
+    // Execute PII masking
+    const cleanResult = performDataCleaning(piiRows, piiProfile, {
+      action: 'mask_pii',
+    });
+
+    const maskedRows = cleanResult.cleanedRows;
+    for (const r of maskedRows) {
+      const email = String(r['Customer_Email'] || '');
+      if (email.includes('alice.smith') || email.includes('bob.jones')) {
+        throw new Error(`Unmasked email detected after cleaning: ${email}`);
+      }
+      if (!email.includes('*')) {
+        throw new Error(`Email not masked with asterisks: ${email}`);
+      }
+    }
+  });
+
+  // ============================================================================
+  // TEST SUITE 13: Advanced In-Memory SQL Queries & Operators
+  // ============================================================================
+  console.log('\n[SQL Engine] Testing advanced SQL syntax: LIKE, NOT NULL, and ordering');
+  recordTest('SQL Engine - LIKE & Pattern Match', 'Executes pattern matching query with LIKE and filters rows', () => {
+    const sqlRes = executeSqlQuery(
+      [
+        { Product: 'Apple iPhone 15', Category: 'Electronics', Price: 999 },
+        { Product: 'Apple MacBook Pro', Category: 'Computers', Price: 1999 },
+        { Product: 'Samsung Galaxy S24', Category: 'Electronics', Price: 899 },
+      ],
+      "SELECT Product, Price FROM dataset WHERE Product LIKE '%Apple%' ORDER BY Price DESC"
+    );
+
+    if (!sqlRes.success) throw new Error(`SQL failed: ${sqlRes.error}`);
+    if (sqlRes.rows.length !== 2) throw new Error(`Expected 2 Apple products, got ${sqlRes.rows.length}`);
+    if (sqlRes.rows[0].Product !== 'Apple MacBook Pro') {
+      throw new Error(`Expected MacBook Pro first due to DESC price order, got ${sqlRes.rows[0].Product}`);
+    }
+  });
+
+  recordTest('SQL Engine - IS NOT NULL & Complex Aggregation', 'Executes multi-aggregate SQL with IS NOT NULL filter', () => {
+    const sqlRes = executeSqlQuery(
+      [
+        { Dept: 'Engineering', Salary: 120000 },
+        { Dept: 'Engineering', Salary: 140000 },
+        { Dept: 'Sales', Salary: 90000 },
+        { Dept: 'Sales', Salary: null },
+      ],
+      'SELECT Dept, COUNT(*) AS head_count, ROUND(AVG(Salary), 2) AS avg_salary FROM dataset WHERE Salary IS NOT NULL GROUP BY Dept ORDER BY avg_salary DESC'
+    );
+
+    if (!sqlRes.success) throw new Error(`SQL failed: ${sqlRes.error}`);
+    if (sqlRes.rows.length !== 2) throw new Error(`Expected 2 departments, got ${sqlRes.rows.length}`);
+    const eng = sqlRes.rows.find(r => r.Dept === 'Engineering');
+    if (!eng || eng.avg_salary !== 130000) {
+      throw new Error(`Expected engineering average salary 130000, got: ${eng?.avg_salary}`);
+    }
+    const sales = sqlRes.rows.find(r => r.Dept === 'Sales');
+    if (!sales || sales.head_count !== 1) {
+      throw new Error(`Expected sales non-null count 1, got: ${sales?.head_count}`);
+    }
+  });
+
+  // ============================================================================
   // SUMMARY REPORT
   // ============================================================================
   console.log('\n================================================================');

@@ -60,10 +60,10 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="h-16 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30">
+    <header id="app-header" className="h-16 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30">
       {/* Brand & Dataset Switcher */}
       <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2.5">
+        <div id="brand-logo" className="flex items-center gap-2.5 cursor-pointer" onClick={() => currentProfile && onSelectDataset(currentProfile.id)}>
           <div className="w-9 h-9 rounded-xl bg-slate-900/90 border border-slate-700/80 flex items-center justify-center p-1 shadow-md shadow-blue-500/10 hover:border-blue-500/50 transition-colors">
             <StudioLogo size={24} />
           </div>
@@ -86,6 +86,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Dataset selector dropdown */}
         <div className="relative hidden md:block">
           <button
+            id="header-dataset-switcher-btn"
             onClick={() => setDropdownOpen(!dropdownOpen)}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/90 border border-slate-800 hover:border-slate-700 text-xs text-slate-200 transition-all shadow-sm"
           >
@@ -195,6 +196,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         <button
+          id="header-try-sample-btn"
           onClick={onLoadSample}
           disabled={loading}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition-colors"
@@ -206,6 +208,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {onOpenCompany360 && (
           <button
+            id="header-company360-btn"
             onClick={onOpenCompany360}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-950/60 hover:bg-blue-900/70 border border-blue-800/60 text-xs font-semibold text-blue-300 transition-colors shadow-sm"
             title="Open Cross-Department Enterprise 360° Intelligence View"
@@ -216,6 +219,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         <button
+          id="header-upload-btn"
           onClick={onOpenUpload}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white transition-colors shadow-sm shadow-blue-500/20"
         >
@@ -225,6 +229,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {currentProfile && (
           <button
+            id="header-export-csv-btn"
             onClick={handleExport}
             className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
             title="Download CSV"

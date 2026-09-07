@@ -1,7 +1,10 @@
 {
-  "name": "react-example",
+  "name": "data-studio-by-pja",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Deterministic Analytics Engine & Session-Scoped AI Business Intelligence Studio by PJA",
+  "author": "Prajwal <prajwal342000@gmail.com>",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",

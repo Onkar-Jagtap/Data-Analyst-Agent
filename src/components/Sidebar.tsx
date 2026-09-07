@@ -99,6 +99,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'explorer',
       label: 'Data Explorer',
       icon: <Table className="w-4 h-4" />,
+      badge: 'SQL',
     },
     {
       id: 'cleaner',
@@ -109,6 +110,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
+      id="sidebar-container"
       className={`border-r border-slate-800/80 bg-slate-950/60 flex flex-col justify-between transition-all duration-200 z-20 shrink-0 ${
         collapsed ? 'w-16' : 'w-60'
       }`}
@@ -121,6 +123,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
           )}
           <button
+            id="sidebar-toggle-btn"
             onClick={onToggleCollapse}
             className="p-1 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors ml-auto"
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -133,6 +136,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           const isActive = activeTab === item.id;
           return (
             <button
+              id={`sidebar-nav-${item.id}`}
               key={item.id}
               onClick={() => onSelectTab(item.id)}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
