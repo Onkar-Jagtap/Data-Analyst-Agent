@@ -111,7 +111,8 @@ function normalizeKeyName(k: string): string {
 
 export async function analyzeEnterpriseDatasets(
   datasets: StoredDataset[],
-  userDirective?: string
+  userDirective?: string,
+  abortSignal?: AbortSignal
 ): Promise<Company360Analysis> {
   // 1. Classify datasets and generate departmental summaries
   const departmentSummaries: DepartmentDatasetSummary[] = datasets.map(d => {
@@ -765,6 +766,7 @@ Respond with a JSON object strictly matching this schema:
           responseMimeType: 'application/json',
           temperature: 0.2,
         },
+        abortSignal,
       });
 
       if (aiRes && aiRes.text) {

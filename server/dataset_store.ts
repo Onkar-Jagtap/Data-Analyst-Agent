@@ -67,7 +67,6 @@ class MultiSessionDatasetStore {
         lastAccessed: Date.now(),
       };
       this.sessions.set(sid, session);
-      this.initSample(sid);
     } else {
       session.lastAccessed = Date.now();
     }
@@ -140,7 +139,7 @@ class MultiSessionDatasetStore {
 
   public getDataset(sessionId: string, id?: string): StoredDataset | undefined {
     const session = this.getSession(sessionId);
-    if (!id) return this.getActiveDataset(sessionId);
+    if (!id || id === 'active') return this.getActiveDataset(sessionId);
     return session.datasets.get(id);
   }
 
@@ -149,7 +148,7 @@ class MultiSessionDatasetStore {
     if (session.activeDatasetId && session.datasets.has(session.activeDatasetId)) {
       return session.datasets.get(session.activeDatasetId);
     }
-    return this.initSample(sessionId);
+    return undefined;
   }
 
   public setActiveDataset(sessionId: string, id: string): boolean {
@@ -175,9 +174,6 @@ class MultiSessionDatasetStore {
 
   public getAllDatasets(sessionId: string): StoredDataset[] {
     const session = this.getSession(sessionId);
-    if (session.datasets.size === 0) {
-      this.initSample(sessionId);
-    }
     return Array.from(session.datasets.values());
   }
 
@@ -271,7 +267,7 @@ class MultiSessionDatasetStore {
     const session = this.getSession(sessionId);
     const dataset = session.datasets.get(datasetId);
     if (!dataset) {
-      return this.addDataset(sessionId, 'transformed_dataset.csv', newRows);
+      throw new Error(`Dataset '${datasetId}' not found for update.`);
     }
 
     // Save current state for undo

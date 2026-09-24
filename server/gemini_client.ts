@@ -52,6 +52,7 @@ export interface GeminiGenerateOptions {
   contents: any;
   config?: any;
   preferredModel?: string;
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -67,6 +68,10 @@ export async function generateWithGemini(
     throw new GeminiServiceError('Gemini API key is not configured');
   }
 
+  if (options.abortSignal?.aborted) {
+    throw new Error('Operation was cancelled');
+  }
+
   const candidateModels: string[] = [];
   if (options.preferredModel) {
     candidateModels.push(options.preferredModel);
@@ -80,6 +85,10 @@ export async function generateWithGemini(
   let lastError: any = null;
 
   for (const model of candidateModels) {
+    if (options.abortSignal?.aborted) {
+      throw new Error('Operation was cancelled');
+    }
+
     try {
       const generatePromise = client.models.generateContent({
         model,
@@ -91,9 +100,23 @@ export async function generateWithGemini(
         setTimeout(() => reject(new Error(`Timeout calling Gemini model ${model}`)), 8000)
       );
 
-      const response = (await Promise.race([generatePromise, timeoutPromise])) as any;
+      const abortPromise = options.abortSignal
+        ? new Promise((_, reject) => {
+            if (options.abortSignal?.aborted) {
+              reject(new Error('Operation was cancelled'));
+            } else {
+              options.abortSignal?.addEventListener('abort', () => reject(new Error('Operation was cancelled')), { once: true });
+            }
+          })
+        : null;
+
+      const racePromises = abortPromise ? [generatePromise, timeoutPromise, abortPromise] : [generatePromise, timeoutPromise];
+      const response = (await Promise.race(racePromises)) as any;
       return response;
     } catch (err: any) {
+      if (err.message === 'Operation was cancelled' || options.abortSignal?.aborted) {
+        throw err;
+      }
       lastError = err;
       // Try next candidate model seamlessly if 404, 503 (high demand), 429 (rate limit), or timeout
       continue;

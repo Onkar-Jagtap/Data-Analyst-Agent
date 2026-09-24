@@ -18,7 +18,7 @@ import { generateWithGemini, getGeminiClient, getAiClient } from './gemini_clien
 export async function generateExecutiveReport(
   profile: DatasetProfile,
   rows: Record<string, any>[],
-  options?: { useAi?: boolean; directive?: string }
+  options?: { useAi?: boolean; directive?: string; abortSignal?: AbortSignal }
 ): Promise<ExecutiveReport> {
   const dashboard = computeDashboardData(rows, profile, {});
   const quality = auditDataQuality(rows, profile);
@@ -73,9 +73,17 @@ export async function generateExecutiveReport(
   }
 
   // Attempt AI narrative enrichment if key is present and enabled
-  if (options?.useAi !== false && process.env.GEMINI_API_KEY) {
+  if (options?.useAi !== false && process.env.GEMINI_API_KEY && !options?.abortSignal?.aborted) {
     try {
-      const enrichedBrief = await generateAiStrategicBrief(profile, calcs, quality, insights, primaryDomain, options?.directive);
+      const enrichedBrief = await generateAiStrategicBrief(
+        profile,
+        calcs,
+        quality,
+        insights,
+        primaryDomain,
+        options?.directive,
+        options?.abortSignal
+      );
       if (enrichedBrief) {
         executiveBrief = enrichedBrief.brief;
         if (enrichedBrief.actionPlan && enrichedBrief.actionPlan.length > 0) {
@@ -551,10 +559,11 @@ async function generateAiStrategicBrief(
   quality: DataQualityAudit,
   insights: any[],
   domain: string,
-  directive?: string
+  directive?: string,
+  abortSignal?: AbortSignal
 ) {
   const client = getAiClient();
-  if (!client) return null;
+  if (!client || abortSignal?.aborted) return null;
 
   let directiveInstruction = '';
   if (directive && directive.trim()) {
@@ -659,6 +668,7 @@ Return a valid JSON object ONLY (no markdown fences, no raw text around it) with
       temperature: 0.2,
       responseMimeType: 'application/json',
     },
+    abortSignal,
   }, client);
 
   const text = response.text || '';
@@ -687,13 +697,14 @@ export async function refineReportSection(params: {
   datasetName: string;
   domain: string;
   calcs: BusinessCalculations;
+  abortSignal?: AbortSignal;
 }): Promise<{ refinedContent: any }> {
   const client = getAiClient();
   if (!client) {
     throw new Error('Gemini API is not configured on server.');
   }
 
-  const { section, instruction, currentContent, datasetName, domain, calcs } = params;
+  const { section, instruction, currentContent, datasetName, domain, calcs, abortSignal } = params;
 
   const prompt = `You are a Chief Financial & Strategy Officer assisting an executive in refining a specific section of an audited corporate report.
 
@@ -729,6 +740,7 @@ Format based on section:
       temperature: 0.3,
       responseMimeType: 'application/json',
     },
+    abortSignal,
   }, client);
 
   const parsed = JSON.parse(response.text || '{}');

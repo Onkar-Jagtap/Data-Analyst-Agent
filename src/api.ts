@@ -1,4 +1,3 @@
-import { clientEngine } from './clientEngine.js';
 import {
   AnalysisResult,
   AssertionEvaluationResult,
@@ -15,6 +14,7 @@ import {
   TransformRequest,
   TransformResult,
 } from './types.js';
+import { generateSchemaGroundedSuggestions } from '../server/suggestion_generator.js';
 
 // Get or initialize persistent client session ID to guarantee data isolation
 export function getClientSessionId(): string {
@@ -85,32 +85,21 @@ export async function fetchDatasets(): Promise<{ datasets: DatasetListItem[]; ac
       activeId: res.data.activeDatasetId,
     };
   }
-  // Seamless client engine fallback
-  const fallback = clientEngine.listDatasets();
   return {
-    datasets: fallback.datasets.map(d => ({
-      id: d.id,
-      filename: d.filename,
-      rowCount: d.rowCount,
-      columnCount: d.columnCount,
-      isSample: d.isSample,
-      createdAt: d.createdAt,
-    })),
-    activeId: fallback.activeId,
+    datasets: [],
+    activeId: undefined,
   };
 }
 
 export async function switchActiveDataset(id: string): Promise<DatasetProfile> {
-  const res = await safeJsonFetch<{ success: boolean; data: DatasetProfile }>(`/api/datasets/active/${id}`, {
+  const res = await safeJsonFetch<{ success: boolean; data: DatasetProfile; error?: any }>(`/api/datasets/active/${id}`, {
     method: 'POST',
     headers: getHeaders(),
   });
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  const prof = clientEngine.setActiveDataset(id);
-  if (!prof) throw new Error('Dataset not found in storage');
-  return prof;
+  throw new Error(res.errorMsg || res.data?.error?.message || `Failed to activate dataset '${id}'`);
 }
 
 export async function loadSampleDataset(): Promise<{ profile: DatasetProfile; quality: DataQualityAudit; insights: InsightItem[] }> {
@@ -122,13 +111,9 @@ export async function loadSampleDataset(): Promise<{ profile: DatasetProfile; qu
     }
   );
   if (res.ok && res.data && res.data.success && res.data.data) {
-    try {
-      clientEngine.syncFromSample(res.data.data.profile.id, res.data.data.profile, res.data.data.quality, res.data.data.insights);
-    } catch {}
     return res.data.data;
   }
-  // Autonomous browser engine generation
-  return clientEngine.initSampleDataset();
+  throw new Error(res.errorMsg || 'Failed to load sample dataset from server.');
 }
 
 export async function loadEnterpriseCompanySuite(): Promise<{ datasets: DatasetListItem[]; activeId?: string }> {
@@ -140,26 +125,12 @@ export async function loadEnterpriseCompanySuite(): Promise<{ datasets: DatasetL
     headers: getHeaders(),
   });
   if (res.ok && res.data && res.data.success && res.data.data) {
-    try {
-      clientEngine.initEnterpriseCompanySuite();
-    } catch {}
     return {
       datasets: res.data.data.datasets,
       activeId: res.data.data.activeDatasetId,
     };
   }
-  const fallback = clientEngine.initEnterpriseCompanySuite();
-  return {
-    datasets: fallback.datasets.map(d => ({
-      id: d.id,
-      filename: d.filename,
-      rowCount: d.rowCount,
-      columnCount: d.columnCount,
-      isSample: false,
-      createdAt: new Date().toISOString(),
-    })),
-    activeId: fallback.activeId,
-  };
+  throw new Error(res.errorMsg || 'Failed to load enterprise company suite from server.');
 }
 
 export async function uploadBatchDatasets(files: File[]): Promise<{ uploadedCount: number; datasets: any[]; activeId?: string }> {
@@ -176,34 +147,13 @@ export async function uploadBatchDatasets(files: File[]): Promise<{ uploadedCoun
   });
 
   if (res.ok && res.data && res.data.success && res.data.data) {
-    for (const file of files) {
-      try {
-        clientEngine.uploadDataset(file).catch(() => {});
-      } catch {}
-    }
     return {
       uploadedCount: res.data.data.uploadedCount,
       datasets: res.data.data.datasets,
       activeId: res.data.data.activeDatasetId,
     };
   }
-
-  // Client-side fallback
-  const processed = [];
-  for (const f of files) {
-    const r = await clientEngine.uploadDataset(f);
-    processed.push({
-      id: r.profile.id,
-      filename: r.profile.filename,
-      rowCount: r.profile.rowCount,
-      columnCount: r.profile.columnCount,
-    });
-  }
-  return {
-    uploadedCount: processed.length,
-    datasets: processed,
-    activeId: processed[0]?.id,
-  };
+  throw new Error(res.errorMsg || 'Failed to upload batch datasets to server.');
 }
 
 export async function fetchCompany360Analysis(directive?: string): Promise<Company360Analysis> {
@@ -214,7 +164,7 @@ export async function fetchCompany360Analysis(directive?: string): Promise<Compa
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.getCompany360Analysis(directive);
+  throw new Error(res.errorMsg || 'Failed to fetch Company 360 analysis from server.');
 }
 
 export async function refineCompany360Analysis(directive: string): Promise<Company360Analysis> {
@@ -229,7 +179,7 @@ export async function refineCompany360Analysis(directive: string): Promise<Compa
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.getCompany360Analysis(directive);
+  throw new Error(res.errorMsg || 'Failed to refine Company 360 analysis on server.');
 }
 
 export async function uploadDataset(file: File): Promise<{ datasetId: string; profile: DatasetProfile; quality: DataQualityAudit; insights: InsightItem[] }> {
@@ -246,77 +196,60 @@ export async function uploadDataset(file: File): Promise<{ datasetId: string; pr
   });
 
   if (res.ok && res.data && res.data.success && res.data.data) {
-    try {
-      clientEngine.uploadDataset(file, res.data.data.datasetId).catch(() => {});
-    } catch {}
     return res.data.data;
   }
-
-  // Client-side parser fallback
-  const clientRes = await clientEngine.uploadDataset(file);
-  return {
-    datasetId: clientRes.profile.id,
-    profile: clientRes.profile,
-    quality: clientRes.quality,
-    insights: clientRes.insights,
-  };
+  throw new Error(res.errorMsg || 'Failed to upload dataset to server.');
 }
 
 export async function fetchProfile(datasetId: string): Promise<DatasetProfile> {
-  const res = await safeJsonFetch<{ success: boolean; data: DatasetProfile }>(`/api/profile/${datasetId}`, {
+  const res = await safeJsonFetch<{ success: boolean; data: DatasetProfile; error?: any }>(`/api/profile/${datasetId}`, {
     headers: getHeaders(),
   });
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  const ds = clientEngine.getDataset(datasetId);
-  if (ds) return ds.profile;
-  throw new Error(res.errorMsg || 'Failed to fetch profile');
+  throw new Error(res.errorMsg || res.data?.error?.message || `Failed to fetch profile for dataset '${datasetId}'`);
 }
 
 export async function fetchQuality(datasetId: string): Promise<DataQualityAudit> {
-  const res = await safeJsonFetch<{ success: boolean; data: DataQualityAudit }>(`/api/quality/${datasetId}`, {
+  const res = await safeJsonFetch<{ success: boolean; data: DataQualityAudit; error?: any }>(`/api/quality/${datasetId}`, {
     headers: getHeaders(),
   });
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  const ds = clientEngine.getDataset(datasetId);
-  if (ds) return ds.qualityAudit;
-  throw new Error(res.errorMsg || 'Failed to fetch quality audit');
+  throw new Error(res.errorMsg || res.data?.error?.message || `Failed to fetch quality audit for dataset '${datasetId}'`);
 }
 
 export async function fetchInsights(datasetId: string): Promise<InsightItem[]> {
-  const res = await safeJsonFetch<{ success: boolean; data: InsightItem[] }>(`/api/insights/${datasetId}`, {
+  const res = await safeJsonFetch<{ success: boolean; data: InsightItem[]; error?: any }>(`/api/insights/${datasetId}`, {
     headers: getHeaders(),
   });
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  const ds = clientEngine.getDataset(datasetId);
-  if (ds) return ds.insights;
-  throw new Error(res.errorMsg || 'Failed to fetch insights');
+  throw new Error(res.errorMsg || res.data?.error?.message || `Failed to fetch insights for dataset '${datasetId}'`);
 }
 
 export async function fetchCorrelationMatrix(datasetId: string): Promise<CorrelationMatrixResult> {
-  const res = await safeJsonFetch<{ success: boolean; data: CorrelationMatrixResult }>(`/api/correlation-matrix/${datasetId}`, {
+  const res = await safeJsonFetch<{ success: boolean; data: CorrelationMatrixResult; error?: any }>(`/api/correlation-matrix/${datasetId}`, {
     headers: getHeaders(),
   });
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.getCorrelationMatrix(datasetId);
+  throw new Error(res.errorMsg || res.data?.error?.message || `Failed to fetch correlation matrix for dataset '${datasetId}'`);
 }
 
 export async function fetchOutlierDrilldown(datasetId: string, column?: string): Promise<OutlierDrilldownResult> {
   const query = column ? `?column=${encodeURIComponent(column)}` : '';
-  const res = await safeJsonFetch<{ success: boolean; data: OutlierDrilldownResult }>(`/api/outlier-drilldown/${datasetId}${query}`, {
+  const res = await safeJsonFetch<{ success: boolean; data: OutlierDrilldownResult; error?: any }>(`/api/outlier-drilldown/${datasetId}${query}`, {
     headers: getHeaders(),
   });
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.getOutlierDrilldown(datasetId, column);
+  throw new Error(res.errorMsg || res.data?.error?.message || `Failed to fetch outlier drilldown for dataset '${datasetId}'`);
 }
 
 export async function askDataQuery(
@@ -329,41 +262,35 @@ export async function askDataQuery(
     headers: getHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ question, conversationHistory }),
   });
-  if (res.ok && res.data && (res.data.success !== false || res.data.answer)) {
+  if (res.data && (res.data.success !== undefined || res.data.answer)) {
     return res.data;
   }
-  if (!clientEngine.hasDataset(datasetId)) {
-    return {
-      success: false,
-      question,
-      datasetId,
-      plan: null as any,
-      answer: `Analysis could not be computed: Dataset '${datasetId}' was not found in server or client session.`,
-      keyMetrics: [],
-      businessInterpretation: [],
-      dataHandling: {
-        totalRows: 0,
-        validRowsAnalyzed: 0,
-        excludedRows: 0,
-        missingValuesExcluded: 0,
-        invalidValuesExcluded: 0,
-        filteredOutRows: 0,
-        methodDescription: 'Dataset identity protection halted analysis.',
-        rulesApplied: ['Deterministic Safety Guard: Prevented analyzing incorrect dataset'],
-        warnings: [`Dataset '${datasetId}' is unavailable.`],
-        confidenceScore: 0,
-        isDeterministic: true,
-      },
-      error: {
-        code: 'DATASET_NOT_FOUND',
-        message: `Dataset '${datasetId}' is not loaded.`,
-        suggestion: 'Please verify the dataset is selected or upload it again.',
-      },
-    };
-  }
-
-  const lastPlan = conversationHistory && conversationHistory.length > 0 ? conversationHistory[0].plan : undefined;
-  return clientEngine.askData(datasetId, question, lastPlan);
+  return {
+    success: false,
+    question,
+    datasetId,
+    plan: null as any,
+    answer: res.errorMsg || 'Failed to communicate with server analysis engine.',
+    keyMetrics: [],
+    businessInterpretation: [],
+    dataHandling: {
+      totalRows: 0,
+      validRowsAnalyzed: 0,
+      excludedRows: 0,
+      missingValuesExcluded: 0,
+      invalidValuesExcluded: 0,
+      filteredOutRows: 0,
+      methodDescription: 'Server connection failed.',
+      rulesApplied: [],
+      warnings: [res.errorMsg || 'Server error'],
+      confidenceScore: 0,
+      isDeterministic: true,
+    },
+    error: {
+      code: 'SERVER_ERROR',
+      message: res.errorMsg || 'Failed to communicate with server analysis engine.',
+    },
+  };
 }
 
 export async function generateCustomChart(
@@ -400,22 +327,7 @@ export async function generateCustomChart(
     }
   }
 
-  // Graceful browser-side engine fallback
-  try {
-    const chart = clientEngine.generateCustomChart(datasetId, {
-      type: params.type,
-      xAxis: params.xAxis || 'Category',
-      yAxis: params.yAxis,
-      aggregation: params.aggregation,
-    });
-    if (chart) {
-      return { chart };
-    }
-  } catch (clientErr: any) {
-    console.warn('Client chart generation fallback:', clientErr);
-  }
-
-  throw new Error(res.errorMsg || 'Failed to generate visualization');
+  throw new Error(res.errorMsg || res.data?.error?.message || 'Failed to generate visualization');
 }
 
 export async function fetchExplorerData(
@@ -435,13 +347,7 @@ export async function fetchExplorerData(
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.getExplorerData(datasetId, {
-    page: params.page,
-    pageSize: params.pageSize,
-    search: params.search,
-    sortColumn: params.sortCol,
-    sortDirection: params.sortDir as any,
-  });
+  throw new Error(res.errorMsg || 'Failed to fetch explorer data from server.');
 }
 
 export async function executeCleanAction(
@@ -461,7 +367,7 @@ export async function executeCleanAction(
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.cleanDataset(datasetId, params.action, params.column, params.constantValue);
+  throw new Error(res.errorMsg || (res.data as any)?.error?.message || 'Failed to perform cleaning action on server.');
 }
 
 export async function undoCleaningAction(datasetId: string) {
@@ -472,7 +378,7 @@ export async function undoCleaningAction(datasetId: string) {
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.undoCleanDataset(datasetId);
+  throw new Error(res.errorMsg || (res.data as any)?.error?.message || 'Failed to undo cleaning action on server.');
 }
 
 export async function checkCanUndo(datasetId: string): Promise<boolean> {
@@ -482,7 +388,7 @@ export async function checkCanUndo(datasetId: string): Promise<boolean> {
   if (res.ok && res.data && typeof res.data.canUndo === 'boolean') {
     return res.data.canUndo;
   }
-  return clientEngine.checkCanUndo(datasetId).canUndo;
+  return false;
 }
 
 export async function generateReproducibleCode(params: {
@@ -544,24 +450,15 @@ export async function exportFilteredSubset(
   datasetId: string,
   params: { format: 'csv' | 'json'; search?: string; sortCol?: string; sortDir?: string }
 ): Promise<Blob> {
-  try {
-    const res = await fetch(`/api/export-subset/${datasetId}`, {
-      method: 'POST',
-      headers: getHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(params),
-    });
-    if (res.ok) {
-      return await res.blob();
-    }
-  } catch {
-    // Fall back to browser engine
-  }
-  const csvContent = clientEngine.exportSubset(datasetId, {
-    search: params.search,
-    sortColumn: params.sortCol,
-    sortDirection: params.sortDir as any,
+  const res = await fetch(`/api/export-subset/${datasetId}`, {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(params),
   });
-  return new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  if (res.ok) {
+    return await res.blob();
+  }
+  throw new Error('Failed to export subset from server.');
 }
 
 export async function fetchDashboardData(
@@ -590,13 +487,7 @@ export async function fetchDashboardData(
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.getDashboardData(datasetId, {
-    dimension: params?.dimension,
-    metric: params?.metric,
-    timeFilter: params?.filterVal,
-    categoryFilter: params?.filterVal,
-    timeGranularity: params?.timeGrain,
-  }) as unknown as DashboardData;
+  throw new Error(res.errorMsg || 'Failed to fetch dashboard data from server.');
 }
 
 export async function applyTransformation(
@@ -611,11 +502,7 @@ export async function applyTransformation(
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  const tRes = clientEngine.transformDataset(datasetId, params);
-  return {
-    ...tRes.result,
-    canUndo: true,
-  };
+  throw new Error(res.errorMsg || (res.data as any)?.error?.message || 'Failed to apply transformation on server.');
 }
 
 export async function evaluateBusinessAssertions(
@@ -630,7 +517,7 @@ export async function evaluateBusinessAssertions(
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.evaluateAssertions(datasetId, assertions);
+  throw new Error(res.errorMsg || (res.data as any)?.error?.message || 'Failed to evaluate assertions on server.');
 }
 
 export async function fetchDataDictionary(
@@ -642,14 +529,7 @@ export async function fetchDataDictionary(
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  const dict = clientEngine.getDataDictionary(datasetId);
-  return {
-    filename: dict.profile.filename,
-    rowCount: dict.profile.rowCount,
-    columnCount: dict.profile.columnCount,
-    columns: dict.columns,
-    markdown: dict.markdown,
-  };
+  throw new Error(res.errorMsg || (res.data as any)?.error?.message || 'Failed to fetch data dictionary from server.');
 }
 
 export async function fetchExecutiveReport(datasetId: string, useAi = true, directive?: string): Promise<ExecutiveReport> {
@@ -661,7 +541,7 @@ export async function fetchExecutiveReport(datasetId: string, useAi = true, dire
   if (res.ok && res.data && res.data.success && res.data.data) {
     return res.data.data;
   }
-  return clientEngine.getExecutiveReport(datasetId, directive);
+  throw new Error(res.errorMsg || 'Failed to generate executive report from server.');
 }
 
 export async function refineReportSection(
@@ -702,5 +582,5 @@ export async function fetchSuggestedQuestions(
   if (res.ok && res.data && res.data.success && Array.isArray(res.data.data) && res.data.data.length > 0) {
     return res.data.data;
   }
-  return clientEngine.getSuggestedQuestions(datasetId, profile, options);
+  return generateSchemaGroundedSuggestions(profile);
 }

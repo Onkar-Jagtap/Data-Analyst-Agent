@@ -254,11 +254,12 @@ export function parseIntentDeterministic(
 export async function planAnalysisWithGemini(
   question: string,
   profile: DatasetProfile,
-  conversationHistory?: { question: string; answerSummary?: string; plan?: AnalysisPlan }[]
+  conversationHistory?: { question: string; answerSummary?: string; plan?: AnalysisPlan }[],
+  abortSignal?: AbortSignal
 ): Promise<AnalysisPlan> {
   const previousPlan = conversationHistory && conversationHistory.length > 0 ? conversationHistory[conversationHistory.length - 1].plan : undefined;
   const ai = getAiClient();
-  if (!ai) {
+  if (!ai || abortSignal?.aborted) {
     return parseIntentDeterministic(question, profile, previousPlan);
   }
 
@@ -319,6 +320,7 @@ Generate the JSON execution plan. Return ONLY raw JSON without markdown code fen
         temperature: 0.1,
         responseMimeType: 'application/json',
       },
+      abortSignal,
     }, ai);
 
     const text = response.text ? response.text.trim() : '';
@@ -350,7 +352,8 @@ export async function explainResultWithGemini(
   methodDescription: string,
   computedData: any,
   summaryMetrics: { label: string; value: string; context?: string }[],
-  dataHandling: DataHandlingReport
+  dataHandling: DataHandlingReport,
+  abortSignal?: AbortSignal
 ): Promise<{
   answer: string;
   businessInterpretation: string[];
@@ -387,7 +390,7 @@ export async function explainResultWithGemini(
     return { answer, businessInterpretation: interpretation };
   };
 
-  if (!ai) {
+  if (!ai || abortSignal?.aborted) {
     return deterministicFallback();
   }
 
@@ -420,6 +423,7 @@ Return raw JSON:
         temperature: 0.2,
         responseMimeType: 'application/json',
       },
+      abortSignal,
     }, ai);
 
     const text = response.text ? response.text.trim() : '';

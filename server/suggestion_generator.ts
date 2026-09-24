@@ -1,5 +1,6 @@
 import { ColumnProfile, DatasetProfile } from './types.js';
 import { generateWithGemini, getGeminiClient, getAiClient } from './gemini_client.js';
+import { resolveColumn, resolveDateColumn } from './query_resolver.js';
 
 export type DatasetDomain =
   | 'sentiment'
@@ -45,129 +46,86 @@ export function detectDatasetDomain(profile: DatasetProfile): SemanticFieldMappi
   const categoricalCols = columns.filter(c => c.type === 'categorical' || c.type === 'text');
   const dateCols = columns.filter(c => c.type === 'datetime');
 
-  // Also inspect column names that might represent dates even if typed categorical/text
-  const effectiveDateCol =
-    dateCols[0] ||
-    columns.find(c => {
-      const n = c.name.toLowerCase();
-      return n === 'date' || n === 'timestamp' || n === 'day' || n === 'month' || n === 'year' || n.endsWith('_date');
-    });
+  // Use centralized resolveDateColumn for deterministic date detection
+  const dateRes = resolveDateColumn(undefined, columns);
+  const effectiveDateCol = dateRes.status === 'resolved' ? dateRes.column : dateCols[0];
 
   // Sentiment detection
-  const sentimentScoreCol = numericCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('sentiment') || n.includes('polarity') || n.includes('satisfaction') || n === 'score';
-  });
+  const sentimentScoreCol = resolveColumn('sentiment_score', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    resolveColumn('polarity', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    numericCols.find(c => {
+      const n = c.name.toLowerCase();
+      return n.includes('sentiment') || n.includes('polarity') || n.includes('satisfaction');
+    });
 
-  const sentimentLabelCol = categoricalCols.find(c => {
-    const n = c.name.toLowerCase();
-    if (n.includes('sentiment') || n.includes('polarity')) return true;
-    // Check top categories or sample values
-    const categories = (c.topCategories?.map(t => String(t.category).toLowerCase()) || [])
-      .concat((c.sampleValues || []).map(s => String(s).toLowerCase()));
-    return (
-      categories.some(v => v === 'positive' || v === 'pos') &&
-      categories.some(v => v === 'negative' || v === 'neg')
-    );
-  });
+  const sentimentLabelCol = resolveColumn('sentiment', columns, { typeFilter: 'categorical', domain: 'general' })?.column ||
+    categoricalCols.find(c => {
+      const n = c.name.toLowerCase();
+      if (n.includes('sentiment') || n.includes('polarity')) return true;
+      const categories = (c.topCategories?.map(t => String(t.category).toLowerCase()) || [])
+        .concat((c.sampleValues || []).map(s => String(s).toLowerCase()));
+      return (
+        categories.some(v => v === 'positive' || v === 'pos') &&
+        categories.some(v => v === 'negative' || v === 'neg')
+      );
+    });
 
   // Voting / Election detection
-  const candidateCol = columns.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('candidate') || n.includes('nominee') || n.includes('politician');
-  });
+  const candidateCol = resolveColumn('candidate', columns, { domain: 'general' })?.column ||
+    columns.find(c => {
+      const n = c.name.toLowerCase();
+      return n.includes('candidate') || n.includes('nominee') || n.includes('politician');
+    });
 
-  const partyCol = columns.find(c => {
-    const n = c.name.toLowerCase();
-    return n === 'party' || n.includes('political_party') || n === 'affiliation';
-  });
-
-  const stateCol = columns.find(c => {
-    const n = c.name.toLowerCase();
-    return (
-      n === 'state' ||
-      n === 'province' ||
-      n === 'constituency' ||
-      n === 'district' ||
-      n === 'precinct' ||
-      n === 'territory' ||
-      n === 'region' ||
-      n === 'geography'
-    );
-  });
-
-  const voteCol = numericCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('vote') || n.includes('ballot') || n.includes('turnout') || n === 'responses' || n === 'response_count';
-  });
+  const partyCol = resolveColumn('party', columns, { domain: 'general' })?.column || resolveColumn('affiliation', columns, { domain: 'general' })?.column;
+  const stateCol = resolveColumn('state', columns, { domain: 'general' })?.column || resolveColumn('province', columns, { domain: 'general' })?.column;
+  const voteCol = resolveColumn('votes', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    numericCols.find(c => {
+      const n = c.name.toLowerCase();
+      return n.includes('vote') || n.includes('ballot') || n.includes('turnout') || n === 'responses';
+    });
 
   // HR / Workforce detection
-  const deptCol = categoricalCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('department') || n.includes('division') || n === 'team' || n === 'dept';
-  });
+  const deptCol = resolveColumn('department', columns, { typeFilter: 'categorical', domain: 'general' })?.column ||
+    resolveColumn('division', columns, { typeFilter: 'categorical', domain: 'general' })?.column;
 
-  const salaryCol = numericCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('salary') || n.includes('wage') || n.includes('compensation') || n === 'pay';
-  });
+  const salaryCol = resolveColumn('salary', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    resolveColumn('wage', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    resolveColumn('compensation', columns, { typeFilter: 'numeric', domain: 'general' })?.column;
 
-  const attritionCol = columns.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('attrition') || n.includes('turnover') || n === 'churn' || n === 'left';
-  });
+  const attritionCol = resolveColumn('attrition', columns, { domain: 'general' })?.column ||
+    resolveColumn('churn', columns, { domain: 'general' })?.column;
 
-  const tenureCol = numericCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('tenure') || n.includes('years_at_company') || n.includes('experience') || n.includes('service_years');
-  });
+  const tenureCol = resolveColumn('tenure', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    resolveColumn('experience', columns, { typeFilter: 'numeric', domain: 'general' })?.column;
 
   // Marketing detection
-  const campaignCol = categoricalCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('campaign') || n.includes('ad_group') || n.includes('ad_name') || n.includes('channel');
-  });
+  const campaignCol = resolveColumn('campaign', columns, { typeFilter: 'categorical', domain: 'general' })?.column ||
+    resolveColumn('channel', columns, { typeFilter: 'categorical', domain: 'general' })?.column;
 
-  const spendCol = numericCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('spend') || n.includes('ad_spend') || n.includes('cost') || n.includes('budget');
-  });
+  const spendCol = resolveColumn('spend', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    resolveColumn('cost', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    resolveColumn('budget', columns, { typeFilter: 'numeric', domain: 'general' })?.column;
 
-  const clicksCol = numericCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('click') || n.includes('cpc') || n.includes('impression');
-  });
-
-  const conversionsCol = numericCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('conversion') || n.includes('lead') || n.includes('acquisition') || n.includes('signup');
-  });
+  const clicksCol = resolveColumn('clicks', columns, { typeFilter: 'numeric', domain: 'general' })?.column;
+  const conversionsCol = resolveColumn('conversions', columns, { typeFilter: 'numeric', domain: 'general' })?.column;
 
   // E-commerce / Sales detection (STRICT: only if actual sales/revenue/profit columns exist)
-  const revenueCol = numericCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('revenue') || n.includes('sales') || n.includes('turnover') || n.includes('gross_sales');
-  });
+  const revenueCol = resolveColumn('revenue', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    resolveColumn('sales', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    resolveColumn('turnover', columns, { typeFilter: 'numeric', domain: 'general' })?.column;
 
-  const profitCol = numericCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('profit') || n.includes('margin') || n.includes('earnings') || n.includes('net_income');
-  });
+  const profitCol = resolveColumn('profit', columns, { typeFilter: 'numeric', domain: 'general' })?.column;
 
-  const quantityCol = numericCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('quantity') || n === 'qty' || n.includes('units') || n.includes('volume');
-  });
+  const quantityCol = resolveColumn('quantity', columns, { typeFilter: 'numeric', domain: 'general' })?.column ||
+    resolveColumn('units', columns, { typeFilter: 'numeric', domain: 'general' })?.column;
 
-  const productCol = categoricalCols.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('product') || n === 'item' || n === 'sku' || n.includes('item_name');
-  });
+  const productCol = resolveColumn('product', columns, { typeFilter: 'categorical', domain: 'general' })?.column ||
+    resolveColumn('item', columns, { typeFilter: 'categorical', domain: 'general' })?.column ||
+    resolveColumn('sku', columns, { typeFilter: 'categorical', domain: 'general' })?.column;
 
-  const customerCol = columns.find(c => {
-    const n = c.name.toLowerCase();
-    return n.includes('customer') || n.includes('client') || n.includes('buyer') || n.includes('account');
-  });
+  const customerCol = resolveColumn('customer', columns, { domain: 'general' })?.column ||
+    resolveColumn('client', columns, { domain: 'general' })?.column;
 
   // Decide domain
   let domain: DatasetDomain = 'general';
@@ -176,12 +134,12 @@ export function detectDatasetDomain(profile: DatasetProfile): SemanticFieldMappi
     domain = 'sentiment';
   } else if (candidateCol || partyCol || (stateCol && voteCol)) {
     domain = 'voting_election';
-  } else if (salaryCol || deptCol || attritionCol || tenureCol) {
+  } else if (revenueCol || profitCol || (productCol && quantityCol)) {
+    domain = 'ecommerce_sales';
+  } else if (salaryCol || (deptCol && (attritionCol || tenureCol || !revenueCol))) {
     domain = 'hr_workforce';
   } else if (campaignCol || (spendCol && conversionsCol)) {
     domain = 'marketing';
-  } else if (revenueCol || profitCol || (productCol && quantityCol)) {
-    domain = 'ecommerce_sales';
   }
 
   return {
@@ -215,6 +173,7 @@ export function detectDatasetDomain(profile: DatasetProfile): SemanticFieldMappi
 /**
  * Strict Column & Concept Validation Layer.
  * Ensures that EVERY referenced concept in a question exists in the dataset schema.
+ * Uses the centralized semantic resolver as the single source of truth.
  */
 export function validateSuggestedQuestion(
   question: string,
@@ -226,40 +185,39 @@ export function validateSuggestedQuestion(
 
   const q = question.toLowerCase();
   const columns = profile.columns || [];
-  const colNamesLower = columns.map(c => c.name.toLowerCase());
-  const numericColsLower = columns.filter(c => c.type === 'numeric').map(c => c.name.toLowerCase());
-  const dateColsLower = columns.filter(c => c.type === 'datetime').map(c => c.name.toLowerCase());
-
-  // Check whether dataset has any date/time column (or explicit Year/Date/Month)
-  const hasDateCol =
-    dateColsLower.length > 0 ||
-    colNamesLower.some(n => n === 'date' || n === 'timestamp' || n === 'year' || n === 'month' || n.endsWith('_date'));
 
   // 1. Revenue / Sales check
   if (/\b(revenue|sales|turnover|gross sales|topline)\b/i.test(q)) {
-    const hasRev = numericColsLower.some(
-      n => n.includes('revenue') || n.includes('sales') || n.includes('turnover') || n.includes('amount')
-    );
+    const hasRev = resolveColumn('revenue', columns, { typeFilter: 'numeric' })?.column ||
+      resolveColumn('sales', columns, { typeFilter: 'numeric' })?.column ||
+      resolveColumn('turnover', columns, { typeFilter: 'numeric' })?.column;
     if (!hasRev) {
       return { valid: false, reason: 'Mentions revenue/sales but no revenue column exists in dataset' };
     }
   }
 
-  // 2. Profit / Margin check
-  if (/\b(profit|profitable|margin|earnings|net income)\b/i.test(q)) {
-    const hasProfit = numericColsLower.some(
-      n => n.includes('profit') || n.includes('margin') || n.includes('earnings') || n.includes('income')
-    );
+  // 2. Profit check (Strictly separated from margin and salary)
+  if (/\b(profit|profitable|net income)\b/i.test(q)) {
+    const hasProfit = resolveColumn('profit', columns, { typeFilter: 'numeric' })?.column ||
+      resolveColumn('net_income', columns, { typeFilter: 'numeric' })?.column;
     if (!hasProfit) {
-      return { valid: false, reason: 'Mentions profit/margin but no profit column exists in dataset' };
+      return { valid: false, reason: 'Mentions profit but no profit column exists in dataset' };
+    }
+  }
+
+  // Margin check (Strictly separated from profit)
+  if (/\b(margin|profit margin)\b/i.test(q)) {
+    const hasMargin = resolveColumn('margin', columns, { typeFilter: 'numeric' })?.column;
+    if (!hasMargin) {
+      return { valid: false, reason: 'Mentions margin but no margin column exists in dataset' };
     }
   }
 
   // 3. Product / SKU / Item check
   if (/\b(product|products|item|items|sku|merchandise)\b/i.test(q)) {
-    const hasProduct = colNamesLower.some(
-      n => n.includes('product') || n.includes('item') || n.includes('sku') || n.includes('merchandise')
-    );
+    const hasProduct = resolveColumn('product', columns)?.column ||
+      resolveColumn('item', columns)?.column ||
+      resolveColumn('sku', columns)?.column;
     if (!hasProduct) {
       return { valid: false, reason: 'Mentions product but no product column exists in dataset' };
     }
@@ -267,9 +225,8 @@ export function validateSuggestedQuestion(
 
   // 4. Customer / Client check
   if (/\b(customer|customers|client|clients|buyer|buyers)\b/i.test(q)) {
-    const hasCustomer = colNamesLower.some(
-      n => n.includes('customer') || n.includes('client') || n.includes('buyer') || n.includes('account')
-    );
+    const hasCustomer = resolveColumn('customer', columns)?.column ||
+      resolveColumn('client', columns)?.column;
     if (!hasCustomer) {
       return { valid: false, reason: 'Mentions customer but no customer column exists in dataset' };
     }
@@ -277,9 +234,9 @@ export function validateSuggestedQuestion(
 
   // 5. Salary / Wage check
   if (/\b(salary|salaries|wage|wages|compensation|pay)\b/i.test(q)) {
-    const hasSalary = numericColsLower.some(
-      n => n.includes('salary') || n.includes('wage') || n.includes('compensation') || n === 'pay'
-    );
+    const hasSalary = resolveColumn('salary', columns, { typeFilter: 'numeric' })?.column ||
+      resolveColumn('wage', columns, { typeFilter: 'numeric' })?.column ||
+      resolveColumn('compensation', columns, { typeFilter: 'numeric' })?.column;
     if (!hasSalary) {
       return { valid: false, reason: 'Mentions salary but no salary column exists in dataset' };
     }
@@ -287,9 +244,9 @@ export function validateSuggestedQuestion(
 
   // 6. Department check
   if (/\b(department|departments|dept|division)\b/i.test(q)) {
-    const hasDept = colNamesLower.some(
-      n => n.includes('department') || n.includes('division') || n === 'dept' || n === 'team'
-    );
+    const hasDept = resolveColumn('department', columns)?.column ||
+      resolveColumn('dept', columns)?.column ||
+      resolveColumn('division', columns)?.column;
     if (!hasDept) {
       return { valid: false, reason: 'Mentions department but no department column exists in dataset' };
     }
@@ -297,9 +254,8 @@ export function validateSuggestedQuestion(
 
   // 7. Attrition / Churn check
   if (/\b(attrition|churn|employee turnover)\b/i.test(q)) {
-    const hasAttrition = colNamesLower.some(
-      n => n.includes('attrition') || n.includes('turnover') || n.includes('churn')
-    );
+    const hasAttrition = resolveColumn('attrition', columns)?.column ||
+      resolveColumn('churn', columns)?.column;
     if (!hasAttrition) {
       return { valid: false, reason: 'Mentions attrition but no attrition column exists in dataset' };
     }
@@ -307,9 +263,8 @@ export function validateSuggestedQuestion(
 
   // 8. Tenure check
   if (/\b(tenure|years of service|years at company)\b/i.test(q)) {
-    const hasTenure = numericColsLower.some(
-      n => n.includes('tenure') || n.includes('experience') || n.includes('years')
-    );
+    const hasTenure = resolveColumn('tenure', columns, { typeFilter: 'numeric' })?.column ||
+      resolveColumn('experience', columns, { typeFilter: 'numeric' })?.column;
     if (!hasTenure) {
       return { valid: false, reason: 'Mentions tenure but no tenure column exists in dataset' };
     }
@@ -317,7 +272,8 @@ export function validateSuggestedQuestion(
 
   // 9. Campaign / Ad check
   if (/\b(campaign|campaigns|ad group|ad name)\b/i.test(q)) {
-    const hasCampaign = colNamesLower.some(n => n.includes('campaign') || n.includes('ad'));
+    const hasCampaign = resolveColumn('campaign', columns)?.column ||
+      resolveColumn('ad', columns)?.column;
     if (!hasCampaign) {
       return { valid: false, reason: 'Mentions campaign but no campaign column exists in dataset' };
     }
@@ -325,9 +281,8 @@ export function validateSuggestedQuestion(
 
   // 10. Candidate check
   if (/\b(candidate|candidates|nominee|politician)\b/i.test(q)) {
-    const hasCandidate = colNamesLower.some(
-      n => n.includes('candidate') || n.includes('nominee') || n.includes('politician')
-    );
+    const hasCandidate = resolveColumn('candidate', columns)?.column ||
+      resolveColumn('nominee', columns)?.column;
     if (!hasCandidate) {
       return { valid: false, reason: 'Mentions candidate but no candidate column exists in dataset' };
     }
@@ -335,9 +290,8 @@ export function validateSuggestedQuestion(
 
   // 11. Sentiment check
   if (/\b(sentiment|polarity|sentiment score|positive sentiment|negative sentiment)\b/i.test(q)) {
-    const hasSentiment = colNamesLower.some(
-      n => n.includes('sentiment') || n.includes('polarity') || n.includes('satisfaction')
-    );
+    const hasSentiment = resolveColumn('sentiment', columns)?.column ||
+      resolveColumn('polarity', columns)?.column;
     if (!hasSentiment) {
       return { valid: false, reason: 'Mentions sentiment but no sentiment column exists in dataset' };
     }
@@ -345,13 +299,14 @@ export function validateSuggestedQuestion(
 
   // 12. State / Region check
   if (/\b(state|states)\b/i.test(q)) {
-    const hasState = colNamesLower.some(n => n === 'state' || n.includes('state') || n === 'province');
+    const hasState = resolveColumn('state', columns)?.column;
     if (!hasState) {
       return { valid: false, reason: 'Mentions state but no state column exists in dataset' };
     }
   }
   if (/\b(region|regions|territory|territories)\b/i.test(q)) {
-    const hasRegion = colNamesLower.some(n => n.includes('region') || n.includes('territory') || n.includes('zone'));
+    const hasRegion = resolveColumn('region', columns)?.column ||
+      resolveColumn('territory', columns)?.column;
     if (!hasRegion) {
       return { valid: false, reason: 'Mentions region but no region column exists in dataset' };
     }
@@ -359,14 +314,16 @@ export function validateSuggestedQuestion(
 
   // 13. Temporal question check (over time, monthly, trend over time)
   if (/\b(over time|monthly|daily|weekly|yearly|annual|quarterly|by month|by year|by date|trend over time)\b/i.test(q)) {
-    if (!hasDateCol) {
+    const dateRes = resolveDateColumn(undefined, columns);
+    if (dateRes.status !== 'resolved') {
       return { valid: false, reason: 'Time-series questions require a date or timestamp column in dataset' };
     }
   }
 
   // 14. Correlation question check
   if (/\b(correlation|relationship between|correlate|associated with)\b/i.test(q)) {
-    if (numericColsLower.length < 2) {
+    const numericCols = columns.filter(c => c.type === 'numeric');
+    if (numericCols.length < 2) {
       return { valid: false, reason: 'Correlation analysis requires at least two numeric columns' };
     }
   }
@@ -627,13 +584,14 @@ export async function generateSuggestionsForDataset(
     lastResult?: any;
     lastQuestion?: string;
     count?: number;
+    abortSignal?: AbortSignal;
   }
 ): Promise<string[]> {
   const desiredCount = options?.count || 5;
 
-  // 1. If AI is disabled or no Gemini key configured, return schema-grounded deterministic suggestions immediately
+  // 1. If AI is disabled or no Gemini key configured or signal aborted, return schema-grounded deterministic suggestions immediately
   const ai = getAiClient();
-  if (!options?.useAi || !ai) {
+  if (!options?.useAi || !ai || options?.abortSignal?.aborted) {
     return generateSchemaGroundedSuggestions(profile, options);
   }
 
@@ -672,6 +630,7 @@ STRICT NON-NEGOTIABLE RULES:
       config: {
         temperature: 0.2,
       },
+      abortSignal: options?.abortSignal,
     }, ai);
 
     const text = response.text?.trim() || '';

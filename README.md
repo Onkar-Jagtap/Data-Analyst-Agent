@@ -18,7 +18,7 @@
 - [How It Works (Architecture)](#how-it-works-architecture)
   - [Zero-Hallucination Math Engine](#1-zero-hallucination-math-engine)
   - [Privacy Shield & Air-Gapped Metadata](#2-privacy-shield--air-gapped-metadata)
-  - [Session Isolation & Multi-Tenancy](#3-session-isolation--multi-tenancy)
+  - [Session-Scoped Isolation](#3-session-scoped-isolation)
   - [Automated Multi-Type Profiler](#4-automated-multi-type-profiler)
   - [Formula Engine Sandbox & Security](#5-formula-engine-sandbox--security)
 - [Key Features](#key-features)
@@ -202,7 +202,7 @@ npm run test:audit
 7. **Dataset 7 — Clinical & Healthcare Records**: Profiles mixed clinical biomarkers, categorical patient cohorts, and zero-NaN Pearson correlation matrices.
 8. **Dataset 8 — Academic Performance**: Parses percentage strings (`96.5%`) into floats and validates GPA aggregations without hallucinating business terminology.
 9. **Dataset 9 — Novel IoT Telemetry**: Tests dynamic reading of novel sensor schemas (`Vibration_Amplitude_mm`, `Bearing_Temp_C`) and handles constant zero-variance voltage columns.
-10. **Test Suite 10 — Session Isolation & Multi-Tenancy**: Verifies that sessions are strictly segregated in `datasetStore` with zero data leakage across browser sessions.
+10. **Test Suite 10 — Session-Scoped Isolation**: Verifies that sessions are strictly segregated in `datasetStore` with zero data leakage across browser sessions.
 11. **Test Suite 11 — Formula Sandbox & Code Injection Defense**: Confirms malicious expressions (`process.exit`, custom function evaluation, prototype mutation) are safely blocked.
 12. **Test Suite 12 — PII Detection & Anonymization Engine**: Validates regex and heuristic identification of emails, phone numbers, and SSNs with GDPR-compliant asterisk masking (`mask_pii`).
 13. **Test Suite 13 — Advanced In-Memory SQL Engine**: Verifies pattern matching with `LIKE`, `IS NOT NULL` filtering, multi-column sorting (`ORDER BY ... DESC`), and complex `GROUP BY` aggregations.

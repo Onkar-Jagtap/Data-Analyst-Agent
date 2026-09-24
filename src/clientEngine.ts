@@ -58,41 +58,23 @@ class ClientAnalyticsEngine {
     // Autonomous browser analytics engine
   }
 
-  public getActiveDataset(): ClientStoredDataset | null {
+  public getActiveDataset(): ClientStoredDataset | undefined {
     if (!this.activeDatasetId) {
-      const first = Array.from(this.datasets.values())[0];
-      if (first) {
-        this.activeDatasetId = first.id;
-        return first;
-      }
-      return null;
+      return undefined;
     }
-    return this.datasets.get(this.activeDatasetId) || Array.from(this.datasets.values())[0] || null;
+    return this.datasets.get(this.activeDatasetId);
   }
 
   public hasDataset(id?: string): boolean {
-    if (!id || id === 'active') return this.datasets.size > 0;
-    return this.datasets.has(id) || (id.startsWith('sample-') && Array.from(this.datasets.values()).some(d => d.isSample));
+    if (!id || id === 'active') return this.activeDatasetId !== null && this.datasets.has(this.activeDatasetId);
+    return this.datasets.has(id);
   }
 
-  public getDataset(id?: string): ClientStoredDataset | null {
+  public getDataset(id?: string): ClientStoredDataset | undefined {
     if (!id || id === 'active') {
-      const active = this.getActiveDataset();
-      if (active) return active;
-      this.initSampleDataset();
       return this.getActiveDataset();
     }
-    if (this.datasets.has(id)) return this.datasets.get(id)!;
-
-    // Check if ID is a sample or matches any sample
-    if (id.startsWith('sample-')) {
-      for (const ds of this.datasets.values()) {
-        if (ds.isSample) return ds;
-      }
-    }
-
-    // If a specific non-active dataset ID was requested but not found, DO NOT silently fall back or bootstrap
-    return null;
+    return this.datasets.get(id);
   }
 
   public listDatasets(): {
@@ -120,11 +102,11 @@ class ClientAnalyticsEngine {
     };
   }
 
-  public setActiveDataset(id: string): DatasetProfile | null {
+  public setActiveDataset(id: string): boolean {
     const ds = this.datasets.get(id);
-    if (!ds) return null;
+    if (!ds) return false;
     this.activeDatasetId = id;
-    return ds.profile;
+    return true;
   }
 
   public initSampleDataset(preferredId?: string): {
@@ -341,14 +323,19 @@ class ClientAnalyticsEngine {
       timeGranularity?: string;
     }
   ) {
-    let ds = this.getDataset(datasetId) || this.getActiveDataset();
-    if (!ds) {
-      this.initSampleDataset(datasetId);
-      ds = this.getActiveDataset();
-    }
-    if (!ds) throw new Error('Dataset not found in client storage.');
+    const ds = this.getDataset(datasetId);
+    if (!ds) throw new Error(`Dataset '${datasetId || 'active'}' not found in client storage.`);
 
     const { type, xAxis, yAxis, aggregation = 'sum', categoryFilter } = params;
+
+    // Strict validation: Validate requested fields against dataset profile schema
+    const colNamesLower = new Map(ds.profile.columns.map(c => [c.name.toLowerCase(), c.name]));
+    if (xAxis && !colNamesLower.has(xAxis.toLowerCase())) {
+      throw new Error(`Requested X-axis column '${xAxis}' not found in dataset schema.`);
+    }
+    if (yAxis && !colNamesLower.has(yAxis.toLowerCase())) {
+      throw new Error(`Requested Y-axis metric '${yAxis}' not found in dataset schema.`);
+    }
 
     let filteredRows = ds.rawRows;
     if (categoryFilter && categoryFilter !== 'ALL') {

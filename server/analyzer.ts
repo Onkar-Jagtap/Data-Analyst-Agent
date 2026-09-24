@@ -9,7 +9,7 @@ import {
   OutlierDrilldownResult,
 } from './types.js';
 import { isNullOrEmpty, parseCleanNumber, parseDateSafe } from './profiler.js';
-import { resolveColumn } from './query_resolver.js';
+import { resolveColumn, resolveDateColumn } from './query_resolver.js';
 
 export interface ExecutionOutput {
   success: boolean;
@@ -328,11 +328,116 @@ export function executeAnalysisPlan(
   // ----------------------------------------------------
   if (plan.operation === 'group_aggregate' || plan.operation === 'ranking') {
     const rawGroupCols = plan.group_by || [];
-    const groupCol = findColumn(rawGroupCols[0]) || profile.columns.find(c => c.type === 'categorical')?.name || profile.columns[0].name;
-    const targetMetric = metricCol || (numCols.length === 1 ? numCols[0].name : null);
-    const agg = plan.aggregation || 'sum';
+    let groupCol: string | null = null;
 
-    if (!targetMetric) {
+    if (rawGroupCols.length > 0 && rawGroupCols[0]) {
+      const resolved = findColumn(rawGroupCols[0]);
+      if (!resolved) {
+        return {
+          success: false,
+          operation: plan.operation,
+          data: null,
+          summaryMetrics: [],
+          methodDescription: `Grouping dimension '${rawGroupCols[0]}' does not exist in dataset.`,
+          dataHandling: {
+            totalRows,
+            validRowsAnalyzed: 0,
+            excludedRows: totalRows,
+            missingValuesExcluded: 0,
+            invalidValuesExcluded: 0,
+            filteredOutRows: filteredOutCount,
+            methodDescription: `Invalid dimension '${rawGroupCols[0]}'`,
+            rulesApplied,
+            warnings: [`Requested dimension '${rawGroupCols[0]}' is not a column in this dataset.`],
+            confidenceScore: 0,
+            isDeterministic: true,
+          },
+          warnings: [`Grouping dimension '${rawGroupCols[0]}' was not found in dataset.`],
+          error: {
+            code: 'INVALID_GROUP_COLUMN',
+            message: `The grouping dimension '${rawGroupCols[0]}' was not found in dataset '${profile.filename}'.`,
+            reason: `Column '${rawGroupCols[0]}' does not exist in schema.`,
+            suggestion: `Available dimensions: ${profile.columns.filter(c => c.type === 'categorical' || c.type === 'text').map(c => c.name).join(', ')}.`,
+          },
+        };
+      }
+      groupCol = resolved;
+    } else {
+      // Generic unassigned grouping: only fallback if plan.group_by is undefined or empty
+      groupCol = profile.columns.find(c => c.type === 'categorical')?.name || profile.columns[0]?.name || null;
+      if (groupCol) {
+        rulesApplied.push(`Deterministic Default: Using primary dimension '${groupCol}' for unassigned grouping.`);
+      }
+    }
+
+    if (!groupCol) {
+      return {
+        success: false,
+        operation: plan.operation,
+        data: null,
+        summaryMetrics: [],
+        methodDescription: 'No valid grouping dimension available in dataset.',
+        dataHandling: {
+          totalRows,
+          validRowsAnalyzed: 0,
+          excludedRows: totalRows,
+          missingValuesExcluded: 0,
+          invalidValuesExcluded: 0,
+          filteredOutRows: filteredOutCount,
+          methodDescription: 'No dimension available',
+          rulesApplied,
+          warnings: ['No categorical or text columns found for grouping.'],
+          confidenceScore: 0,
+          isDeterministic: true,
+        },
+        warnings: ['No dimension column available for grouping.'],
+        error: {
+          code: 'NO_DIMENSION_COLUMN',
+          message: `Cannot perform grouping because dataset '${profile.filename}' has no dimensions.`,
+        },
+      };
+    }
+
+    const agg = plan.aggregation || 'sum';
+    let targetMetric: string | null = null;
+
+    if (plan.metric) {
+      const resolved = findColumn(plan.metric, 'numeric') || findColumn(plan.metric);
+      if (!resolved) {
+        return {
+          success: false,
+          operation: plan.operation,
+          data: null,
+          summaryMetrics: [],
+          methodDescription: `Requested metric '${plan.metric}' was not found in dataset.`,
+          dataHandling: {
+            totalRows,
+            validRowsAnalyzed: 0,
+            excludedRows: totalRows,
+            missingValuesExcluded: 0,
+            invalidValuesExcluded: 0,
+            filteredOutRows: filteredOutCount,
+            methodDescription: `Metric '${plan.metric}' does not exist`,
+            rulesApplied,
+            warnings: [`Requested metric '${plan.metric}' is not a column in this dataset.`],
+            confidenceScore: 0,
+            isDeterministic: true,
+          },
+          warnings: [`Metric '${plan.metric}' was not found in dataset.`],
+          error: {
+            code: 'UNKNOWN_METRIC',
+            message: `The metric '${plan.metric}' was not found in dataset '${profile.filename}'.`,
+            suggestion: `Available numeric metrics are: ${numCols.map(c => c.name).join(', ')}.`,
+          },
+        };
+      }
+      targetMetric = resolved;
+    } else if (agg === 'count') {
+      targetMetric = null;
+    } else if (numCols.length === 1) {
+      targetMetric = numCols[0].name;
+      rulesApplied.push(`Deterministic Default: Using single numeric metric '${targetMetric}'.`);
+    } else {
       return {
         success: false,
         operation: 'group_aggregate',
@@ -509,17 +614,20 @@ export function executeAnalysisPlan(
   // OPERATION: TIME SERIES
   // ----------------------------------------------------
   if (plan.operation === 'time_series') {
-    const dateCol = findColumn(plan.group_by?.[0]) || profile.columns.find(c => c.type === 'datetime')?.name;
-    const targetMetric = metricCol || profile.columns.find(c => c.type === 'numeric')?.name;
-    const agg = plan.aggregation || 'sum';
+    let dateCol: string | null = null;
+    const dateRes = resolveDateColumn(plan.group_by?.[0], profile.columns, {
+      userQuestion: plan.user_intent_summary,
+    });
 
-    if (!dateCol || !targetMetric) {
+    if (dateRes.status === 'resolved' && dateRes.column) {
+      dateCol = dateRes.column.name;
+    } else if (dateRes.status === 'ambiguous') {
       return {
         success: false,
         operation: 'time_series',
         data: null,
         summaryMetrics: [],
-        methodDescription: 'Missing date or numeric column for time-series analysis.',
+        methodDescription: dateRes.reason || 'Ambiguous date column.',
         dataHandling: {
           totalRows,
           validRowsAnalyzed: 0,
@@ -527,16 +635,110 @@ export function executeAnalysisPlan(
           missingValuesExcluded: 0,
           invalidValuesExcluded: 0,
           filteredOutRows: filteredOutCount,
-          methodDescription: 'Missing date or metric',
+          methodDescription: 'Ambiguous date column',
           rulesApplied,
-          warnings: ['Time-series requires a datetime column and a numeric metric.'],
+          warnings: [dateRes.reason || 'Multiple date columns match.'],
           confidenceScore: 0,
           isDeterministic: true,
         },
-        warnings: ['Time-series requires a datetime column and a numeric metric.'],
+        warnings: [dateRes.reason || 'Multiple date columns match.'],
         error: {
-          code: 'MISSING_DATE_COLUMN',
-          message: 'Could not find a valid date column or numeric metric for time-series.',
+          code: 'AMBIGUOUS_DATETIME_COLUMN',
+          message: dateRes.clarificationMessage || 'Multiple date columns found. Please clarify which one to use.',
+          suggestion: `Candidate date columns: ${dateRes.candidates?.map(c => c.name).join(', ')}.`,
+        },
+      };
+    } else {
+      // not_found
+      return {
+        success: false,
+        operation: 'time_series',
+        data: null,
+        summaryMetrics: [],
+        methodDescription: dateRes.reason || 'Date column not found.',
+        dataHandling: {
+          totalRows,
+          validRowsAnalyzed: 0,
+          excludedRows: totalRows,
+          missingValuesExcluded: 0,
+          invalidValuesExcluded: 0,
+          filteredOutRows: filteredOutCount,
+          methodDescription: 'Invalid date column',
+          rulesApplied,
+          warnings: ['Cannot compute time series without a valid datetime column.'],
+          confidenceScore: 0,
+          isDeterministic: true,
+        },
+        warnings: ['Date column not found.'],
+        error: {
+          code: 'INVALID_DATETIME_COLUMN',
+          message: plan.group_by?.[0]
+            ? `The requested date column '${plan.group_by[0]}' was not found as a datetime column in dataset '${profile.filename}'.`
+            : `Cannot compute time series trend because dataset '${profile.filename}' contains no date or timestamp columns.`,
+        },
+      };
+    }
+
+    const agg = plan.aggregation || 'sum';
+    let targetMetric: string | null = null;
+
+    if (plan.metric) {
+      const resolved = findColumn(plan.metric, 'numeric') || findColumn(plan.metric);
+      if (!resolved) {
+        return {
+          success: false,
+          operation: 'time_series',
+          data: null,
+          summaryMetrics: [],
+          methodDescription: `Metric '${plan.metric}' was not found in dataset.`,
+          dataHandling: {
+            totalRows,
+            validRowsAnalyzed: 0,
+            excludedRows: totalRows,
+            missingValuesExcluded: 0,
+            invalidValuesExcluded: 0,
+            filteredOutRows: filteredOutCount,
+            methodDescription: 'Metric not found',
+            rulesApplied,
+            warnings: [`Requested metric '${plan.metric}' does not exist.`],
+            confidenceScore: 0,
+            isDeterministic: true,
+          },
+          warnings: [`Metric '${plan.metric}' not found.`],
+          error: {
+            code: 'UNKNOWN_METRIC',
+            message: `The metric '${plan.metric}' was not found in dataset '${profile.filename}'.`,
+          },
+        };
+      }
+      targetMetric = resolved;
+    } else if (numCols.length === 1) {
+      targetMetric = numCols[0].name;
+      rulesApplied.push(`Deterministic Default: Using single numeric metric '${targetMetric}'.`);
+    } else {
+      return {
+        success: false,
+        operation: 'time_series',
+        data: null,
+        summaryMetrics: [],
+        methodDescription: 'Missing or ambiguous numeric metric for time-series analysis.',
+        dataHandling: {
+          totalRows,
+          validRowsAnalyzed: 0,
+          excludedRows: totalRows,
+          missingValuesExcluded: 0,
+          invalidValuesExcluded: 0,
+          filteredOutRows: filteredOutCount,
+          methodDescription: 'Missing metric',
+          rulesApplied,
+          warnings: ['Time-series requires an explicit numeric metric.'],
+          confidenceScore: 0,
+          isDeterministic: true,
+        },
+        warnings: ['No numeric metric specified for time-series.'],
+        error: {
+          code: 'AMBIGUOUS_METRIC',
+          message: 'Please specify which metric to analyze over time.',
         },
       };
     }
@@ -655,16 +857,93 @@ export function executeAnalysisPlan(
   // ----------------------------------------------------
   if (plan.operation === 'correlation') {
     const numCols = profile.columns.filter(c => c.type === 'numeric');
-    const col1Name = findColumn(plan.metric) || numCols[0]?.name;
-    const col2Name = findColumn(plan.secondary_metric) || numCols.find(c => c.name !== col1Name)?.name || numCols[1]?.name;
+    let col1Name: string | null = null;
+    let col2Name: string | null = null;
 
-    if (!col1Name || !col2Name) {
+    if (plan.metric) {
+      col1Name = findColumn(plan.metric, 'numeric') || findColumn(plan.metric);
+      if (!col1Name) {
+        return {
+          success: false,
+          operation: 'correlation',
+          data: null,
+          summaryMetrics: [],
+          methodDescription: `Primary correlation variable '${plan.metric}' was not found in dataset.`,
+          dataHandling: {
+            totalRows,
+            validRowsAnalyzed: 0,
+            excludedRows: totalRows,
+            missingValuesExcluded: 0,
+            invalidValuesExcluded: 0,
+            filteredOutRows: filteredOutCount,
+            methodDescription: 'Metric not found',
+            rulesApplied,
+            warnings: [`Metric '${plan.metric}' was not found.`],
+            confidenceScore: 0,
+            isDeterministic: true,
+          },
+          warnings: [`Primary variable '${plan.metric}' not found.`],
+          error: {
+            code: 'UNKNOWN_COLUMN',
+            message: `The metric '${plan.metric}' was not found in dataset '${profile.filename}'.`,
+          },
+        };
+      }
+    }
+
+    if (plan.secondary_metric) {
+      col2Name = findColumn(plan.secondary_metric, 'numeric') || findColumn(plan.secondary_metric);
+      if (!col2Name) {
+        return {
+          success: false,
+          operation: 'correlation',
+          data: null,
+          summaryMetrics: [],
+          methodDescription: `Secondary correlation variable '${plan.secondary_metric}' was not found in dataset.`,
+          dataHandling: {
+            totalRows,
+            validRowsAnalyzed: 0,
+            excludedRows: totalRows,
+            missingValuesExcluded: 0,
+            invalidValuesExcluded: 0,
+            filteredOutRows: filteredOutCount,
+            methodDescription: 'Secondary metric not found',
+            rulesApplied,
+            warnings: [`Secondary metric '${plan.secondary_metric}' was not found.`],
+            confidenceScore: 0,
+            isDeterministic: true,
+          },
+          warnings: [`Secondary variable '${plan.secondary_metric}' not found.`],
+          error: {
+            code: 'UNKNOWN_COLUMN',
+            message: `The secondary metric '${plan.secondary_metric}' was not found in dataset '${profile.filename}'.`,
+          },
+        };
+      }
+    }
+
+    // Defaulting is ONLY permitted when metrics were completely unspecified
+    if (!col1Name && !col2Name) {
+      if (numCols.length >= 2) {
+        col1Name = numCols[0].name;
+        col2Name = numCols[1].name;
+        rulesApplied.push(`Deterministic Default: Selected '${col1Name}' and '${col2Name}' for generic correlation.`);
+      }
+    } else if (col1Name && !col2Name) {
+      const remaining = numCols.find(c => c.name !== col1Name);
+      if (remaining) {
+        col2Name = remaining.name;
+        rulesApplied.push(`Deterministic Default: Paired '${col1Name}' with '${col2Name}'.`);
+      }
+    }
+
+    if (!col1Name || !col2Name || col1Name === col2Name) {
       return {
         success: false,
         operation: 'correlation',
         data: null,
         summaryMetrics: [],
-        methodDescription: 'Correlation requires at least two numeric columns.',
+        methodDescription: 'Correlation requires at least two distinct numeric columns.',
         dataHandling: {
           totalRows,
           validRowsAnalyzed: 0,
@@ -681,7 +960,7 @@ export function executeAnalysisPlan(
         warnings: ['Need 2 numeric columns for Pearson correlation.'],
         error: {
           code: 'INSUFFICIENT_COLUMNS',
-          message: 'Correlation analysis requires at least two numeric columns.',
+          message: 'Correlation analysis requires at least two distinct numeric columns.',
         },
       };
     }
@@ -755,18 +1034,36 @@ export function executeAnalysisPlan(
       denom2 += dy * dy;
     }
 
-    const r = denom1 > 0 && denom2 > 0 ? numerator / Math.sqrt(denom1 * denom2) : 0;
-    const rRounded = Math.round(r * 1000) / 1000;
+    const isConstant1 = denom1 === 0;
+    const isConstant2 = denom2 === 0;
+    const isConstant = isConstant1 || isConstant2;
 
-    let strength = 'negligible';
-    const absR = Math.abs(r);
-    if (absR >= 0.8) strength = 'very strong';
-    else if (absR >= 0.6) strength = 'strong';
-    else if (absR >= 0.4) strength = 'moderate';
-    else if (absR >= 0.2) strength = 'weak';
+    let r: number | null = null;
+    let rRounded: number | null = null;
+    let strength = 'undefined (zero variance)';
 
-    const direction = r > 0 ? 'positive' : r < 0 ? 'negative' : 'neutral';
-    const methodDescription = `Pearson correlation coefficient computed on ${n.toLocaleString()} pairwise complete observations.`;
+    if (isConstant) {
+      const zeroVarCols: string[] = [];
+      if (isConstant1) zeroVarCols.push(col1Name);
+      if (isConstant2) zeroVarCols.push(col2Name);
+      rulesApplied.push(`Mathematical Boundary: Zero variance in ${zeroVarCols.join(' and ')}; Pearson correlation is undefined.`);
+      warnings.push(`Variable ${zeroVarCols.join(' and ')} has zero variance (constant values). Pearson correlation cannot be computed and is reported as undefined.`);
+    } else {
+      r = numerator / Math.sqrt(denom1 * denom2);
+      r = Math.max(-1, Math.min(1, r));
+      rRounded = Math.round(r * 1000) / 1000;
+      const absR = Math.abs(r);
+      if (absR >= 0.8) strength = 'very strong';
+      else if (absR >= 0.6) strength = 'strong';
+      else if (absR >= 0.4) strength = 'moderate';
+      else if (absR >= 0.2) strength = 'weak';
+      else strength = 'negligible';
+    }
+
+    const direction = isConstant ? 'undefined' : r! > 0 ? 'positive' : r! < 0 ? 'negative' : 'neutral';
+    const methodDescription = isConstant
+      ? `Pearson correlation is mathematically undefined because ${isConstant1 && isConstant2 ? 'both variables' : isConstant1 ? `'${col1Name}'` : `'${col2Name}'`} have zero variance.`
+      : `Pearson correlation coefficient computed on ${n.toLocaleString()} pairwise complete observations.`;
     rulesApplied.push('Pairwise complete observation filter applied (rows with missing values in either column were excluded)');
     rulesApplied.push('Note: Correlation measures linear association and does not establish causation.');
 
@@ -777,6 +1074,7 @@ export function executeAnalysisPlan(
         column1: col1Name,
         column2: col2Name,
         pearsonR: rRounded,
+        isConstantVariance: isConstant,
         strength,
         direction,
         pairsSample: pairs.slice(0, 150),
@@ -784,13 +1082,13 @@ export function executeAnalysisPlan(
       summaryMetrics: [
         {
           label: 'Pearson r',
-          value: rRounded.toString(),
-          context: `${strength.toUpperCase()} ${direction.toUpperCase()}`,
+          value: rRounded !== null ? rRounded.toString() : 'Undefined',
+          context: isConstant ? 'UNDEFINED (ZERO VARIANCE)' : `${strength.toUpperCase()} ${direction.toUpperCase()}`,
         },
         {
           label: 'R-Squared (Variance Explained)',
-          value: `${Math.round(r * r * 1000) / 10}%`,
-          context: 'Variance shared between variables',
+          value: isConstant ? 'N/A' : `${Math.round(r! * r! * 1000) / 10}%`,
+          context: isConstant ? 'Undefined for constant variable' : 'Variance shared between variables',
         },
         {
           label: 'Sample Size',
@@ -1045,7 +1343,7 @@ export function calculateCorrelationMatrix(
         undefinedDetails.push({
           col1: colA,
           col2: colB,
-          reason: `Zero variance in ${zeroVarCols.join(' and ')}; Pearson correlation is mathematically undefined (represented as 0 with note).`,
+          reason: `Zero variance in ${zeroVarCols.join(' and ')}; Pearson correlation is mathematically undefined (recorded as 0).`,
         });
       } else {
         const r = Math.max(-1, Math.min(1, num / denom));

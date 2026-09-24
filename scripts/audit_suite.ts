@@ -23,6 +23,7 @@ import {
   generateSuggestionsForDataset,
 } from '../server/suggestion_generator.js';
 import { executeSqlQuery } from '../server/sql_engine.js';
+import { clientEngine } from '../src/clientEngine.js';
 
 interface TestResult {
   suite: string;
@@ -512,140 +513,165 @@ async function runAudit() {
   // ============================================================================
   console.log('\n[HTTP Endpoints Audit] Testing live REST endpoints against running server');
 
-  await recordTest('API - GET /api/health', 'Health check returns ok', async () => {
-    const res = await fetch('http://localhost:3000/api/health');
-    const json = await res.json();
-    if (json.status !== 'ok') throw new Error('Health check status not ok: ' + JSON.stringify(json));
-  });
+  let apiBaseUrl = 'http://localhost:3000';
+  let tempApiServer: any = null;
+  let createdSampleId = 'sample-b2b-sales-sion';
 
-  await recordTest('API - POST /api/sample', 'Initializes sample dataset', async () => {
-    const res = await fetch('http://localhost:3000/api/sample', { method: 'POST' });
-    const json = await res.json();
-    if (!json.success || !json.data?.profile?.id) throw new Error('Failed to init sample: ' + JSON.stringify(json));
-  });
-
-  await recordTest('API - GET /api/datasets', 'Lists available datasets for session', async () => {
-    const res = await fetch('http://localhost:3000/api/datasets');
-    const json = await res.json();
-    if (!json.success || !Array.isArray(json.data)) throw new Error('Datasets list invalid: ' + JSON.stringify(json));
-  });
-
-  await recordTest('API - GET /api/dashboard/:id', 'Computes dashboard metrics & charts', async () => {
-    const sampleId = 'sample-b2b-sales-sion';
-    const res = await fetch(`http://localhost:3000/api/dashboard/${sampleId}`);
-    const json = await res.json();
-    if (!json.success || !json.data?.metrics?.primaryTotalFormatted) {
-      throw new Error('Dashboard API response missing metrics: ' + JSON.stringify(json));
-    }
-    if (!json.data?.comboChart || !json.data?.treemapChart) {
-      throw new Error('Dashboard API missing combo or treemap charts');
-    }
-  });
-
-  await recordTest('API - POST /api/chart/:id (combo)', 'Generates dual-axis combo chart via API', async () => {
-    const sampleId = 'sample-b2b-sales-sion';
-    const res = await fetch(`http://localhost:3000/api/chart/${sampleId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'combo',
-        xAxis: 'Region',
-        yAxis: 'Revenue',
-        secondaryYAxis: 'Profit',
-      }),
+  try {
+    const probe = await fetch(`${apiBaseUrl}/api/health`, { signal: AbortSignal.timeout(1000) });
+    if (!probe.ok) throw new Error('Not running');
+  } catch {
+    const { app } = await import('../server/app.js');
+    await new Promise<void>((resolve) => {
+      tempApiServer = app.listen(0, '127.0.0.1', () => {
+        const port = tempApiServer.address().port;
+        apiBaseUrl = `http://127.0.0.1:${port}`;
+        resolve();
+      });
     });
-    const json = await res.json();
-    if (!json.success || !json.chart || !json.chart.data || json.chart.data.length !== 2) {
-      throw new Error('Combo chart API failed: ' + JSON.stringify(json));
-    }
-  });
+  }
 
-  await recordTest('API - POST /api/chart/:id (treemap)', 'Generates hierarchical treemap via API', async () => {
-    const sampleId = 'sample-b2b-sales-sion';
-    const res = await fetch(`http://localhost:3000/api/chart/${sampleId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'treemap',
-        xAxis: 'Region',
-        yAxis: 'Revenue',
-      }),
+  try {
+    await recordTest('API - GET /api/health', 'Health check returns ok', async () => {
+      const res = await fetch(`${apiBaseUrl}/api/health`);
+      const json = await res.json();
+      if (json.status !== 'ok') throw new Error('Health check status not ok: ' + JSON.stringify(json));
     });
-    const json = await res.json();
-    if (!json.success || !json.chart || !json.chart.data || json.chart.data[0].type !== 'treemap') {
-      throw new Error('Treemap chart API failed: ' + JSON.stringify(json));
-    }
-  });
 
-  await recordTest('API - POST /api/transform/:id', 'Calculates formula column via API', async () => {
-    const sampleId = 'sample-b2b-sales-sion';
-    const res = await fetch(`http://localhost:3000/api/transform/${sampleId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'formula',
-        targetColumn: 'Rev_Per_Unit',
-        formula: 'Revenue / Quantity',
-      }),
+    await recordTest('API - POST /api/sample', 'Initializes sample dataset', async () => {
+      const res = await fetch(`${apiBaseUrl}/api/sample`, { method: 'POST' });
+      const json = await res.json();
+      if (!json.success || !json.data?.profile?.id) throw new Error('Failed to init sample: ' + JSON.stringify(json));
+      createdSampleId = json.data.profile.id;
     });
-    const json = await res.json();
-    if (!json.success || !json.data?.profile) {
-      throw new Error('Transform API failed: ' + JSON.stringify(json));
-    }
-  });
 
-  await recordTest('API - GET /api/data-dictionary/:id', 'Generates and downloads data dictionary', async () => {
-    const sampleId = 'sample-b2b-sales-sion';
-    const res = await fetch(`http://localhost:3000/api/data-dictionary/${sampleId}`);
-    const json = await res.json();
-    if (!json.success || !json.data?.markdown || !Array.isArray(json.data?.columns)) {
-      throw new Error('Data dictionary API failed: ' + JSON.stringify(json));
-    }
-  });
-
-  await recordTest('API - POST /api/generate-code', 'Generates reproducible Python & SQL pipeline code', async () => {
-    const res = await fetch('http://localhost:3000/api/generate-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filename: 'sales_test.csv',
-        metric: 'Revenue',
-        xAxis: 'Region',
-        aggregation: 'sum',
-        limit: 10,
-      }),
+    await recordTest('API - GET /api/datasets', 'Lists available datasets for session', async () => {
+      const res = await fetch(`${apiBaseUrl}/api/datasets`);
+      const json = await res.json();
+      if (!json.success || !Array.isArray(json.data)) throw new Error('Datasets list invalid: ' + JSON.stringify(json));
     });
-    const json = await res.json();
-    if (!json.success || !json.data?.python || !json.data?.sql) {
-      throw new Error('Generate code failed: ' + JSON.stringify(json));
-    }
-    if (!json.data.python.includes('import pandas as pd')) {
-      throw new Error('Python code does not import pandas');
-    }
-    if (!json.data.sql.includes('SELECT')) {
-      throw new Error('SQL code does not include SELECT');
-    }
-  });
 
-  await recordTest('API - POST /api/sql/:id', 'Executes arbitrary SQL query against active dataset', async () => {
-    const sampleId = 'sample-b2b-sales-sion';
-    const query = `SELECT "Region", COUNT(*) as total_count, ROUND(SUM("Revenue"), 2) as total_rev FROM dataset GROUP BY 1 ORDER BY 3 DESC LIMIT 5;`;
-    const res = await fetch(`http://localhost:3000/api/sql/${sampleId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
+    await recordTest('API - GET /api/dashboard/:id', 'Computes dashboard metrics & charts', async () => {
+      const sampleId = createdSampleId;
+      const res = await fetch(`${apiBaseUrl}/api/dashboard/${sampleId}`);
+      const json = await res.json();
+      if (!json.success || !json.data?.metrics?.primaryTotalFormatted) {
+        throw new Error('Dashboard API response missing metrics: ' + JSON.stringify(json));
+      }
+      if (!json.data?.comboChart || !json.data?.treemapChart) {
+        throw new Error('Dashboard API missing combo or treemap charts');
+      }
     });
-    const json = await res.json();
-    if (!json.success || !Array.isArray(json.rows) || json.rows.length === 0) {
-      throw new Error('SQL execution API failed: ' + JSON.stringify(json));
+
+    await recordTest('API - POST /api/chart/:id (combo)', 'Generates dual-axis combo chart via API', async () => {
+      const sampleId = createdSampleId;
+      const res = await fetch(`${apiBaseUrl}/api/chart/${sampleId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'combo',
+          xAxis: 'Region',
+          yAxis: 'Revenue',
+          secondaryYAxis: 'Profit',
+        }),
+      });
+      const json = await res.json();
+      if (!json.success || !json.chart || !json.chart.data || json.chart.data.length !== 2) {
+        throw new Error('Combo chart API failed: ' + JSON.stringify(json));
+      }
+    });
+
+    await recordTest('API - POST /api/chart/:id (treemap)', 'Generates hierarchical treemap via API', async () => {
+      const sampleId = createdSampleId;
+      const res = await fetch(`${apiBaseUrl}/api/chart/${sampleId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'treemap',
+          xAxis: 'Region',
+          yAxis: 'Revenue',
+        }),
+      });
+      const json = await res.json();
+      if (!json.success || !json.chart || !json.chart.data || json.chart.data[0].type !== 'treemap') {
+        throw new Error('Treemap chart API failed: ' + JSON.stringify(json));
+      }
+    });
+
+    await recordTest('API - POST /api/transform/:id', 'Calculates formula column via API', async () => {
+      const sampleId = createdSampleId;
+      const res = await fetch(`${apiBaseUrl}/api/transform/${sampleId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'formula',
+          targetColumn: 'Rev_Per_Unit',
+          formula: 'Revenue / Quantity',
+        }),
+      });
+      const json = await res.json();
+      if (!json.success || !json.data?.profile) {
+        throw new Error('Transform API failed: ' + JSON.stringify(json));
+      }
+    });
+
+    await recordTest('API - GET /api/data-dictionary/:id', 'Generates and downloads data dictionary', async () => {
+      const sampleId = createdSampleId;
+      const res = await fetch(`${apiBaseUrl}/api/data-dictionary/${sampleId}`);
+      const json = await res.json();
+      if (!json.success || !json.data?.markdown || !Array.isArray(json.data?.columns)) {
+        throw new Error('Data dictionary API failed: ' + JSON.stringify(json));
+      }
+    });
+
+    await recordTest('API - POST /api/generate-code', 'Generates reproducible Python & SQL pipeline code', async () => {
+      const res = await fetch(`${apiBaseUrl}/api/generate-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: 'sales_test.csv',
+          metric: 'Revenue',
+          xAxis: 'Region',
+          aggregation: 'sum',
+          limit: 10,
+        }),
+      });
+      const json = await res.json();
+      if (!json.success || !json.data?.python || !json.data?.sql) {
+        throw new Error('Generate code failed: ' + JSON.stringify(json));
+      }
+      if (!json.data.python.includes('import pandas as pd')) {
+        throw new Error('Python code does not import pandas');
+      }
+      if (!json.data.sql.includes('SELECT')) {
+        throw new Error('SQL code does not include SELECT');
+      }
+    });
+
+    await recordTest('API - POST /api/sql/:id', 'Executes arbitrary SQL query against active dataset', async () => {
+      const sampleId = createdSampleId;
+      const query = `SELECT "Region", COUNT(*) as total_count, ROUND(SUM("Revenue"), 2) as total_rev FROM dataset GROUP BY 1 ORDER BY 3 DESC LIMIT 5;`;
+      const res = await fetch(`${apiBaseUrl}/api/sql/${sampleId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+      });
+      const json = await res.json();
+      if (!json.success || !Array.isArray(json.rows) || json.rows.length === 0) {
+        throw new Error('SQL execution API failed: ' + JSON.stringify(json));
+      }
+      if (!json.columns.includes('Region') || !json.columns.includes('total_rev')) {
+        throw new Error('SQL columns missing in output: ' + JSON.stringify(json.columns));
+      }
+      if (typeof json.executionTimeMs !== 'number') {
+        throw new Error('Missing executionTimeMs in SQL output');
+      }
+    });
+  } finally {
+    if (tempApiServer) {
+      tempApiServer.close();
     }
-    if (!json.columns.includes('Region') || !json.columns.includes('total_rev')) {
-      throw new Error('SQL columns missing in output: ' + JSON.stringify(json.columns));
-    }
-    if (typeof json.executionTimeMs !== 'number') {
-      throw new Error('Missing executionTimeMs in SQL output');
-    }
-  });
+  }
 
   // ============================================================================
   // SQL IN-MEMORY EXECUTION ENGINE AUDIT
@@ -1291,26 +1317,62 @@ async function runAudit() {
   });
 
   await recordTest('API - Suggestions Endpoints (GET & POST)', 'Returns validated suggestions via live HTTP API', async () => {
-    const sampleId = 'sample-b2b-sales-sion';
-    // GET
-    const resGet = await fetch(`http://localhost:3000/api/suggestions/${sampleId}`);
-    const jsonGet = await resGet.json();
-    if (!jsonGet.success || !Array.isArray(jsonGet.data) || jsonGet.data.length === 0) {
-      throw new Error('GET /api/suggestions/:id failed: ' + JSON.stringify(jsonGet));
+    let baseUrl = 'http://localhost:3000';
+    let tempServer: any = null;
+
+    try {
+      const probe = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(1000) });
+      if (!probe.ok) throw new Error('Not running');
+    } catch {
+      // Start temporary test server instance if dev server is not actively running
+      const { app } = await import('../server/app.js');
+      await new Promise<void>((resolve) => {
+        tempServer = app.listen(0, '127.0.0.1', () => {
+          const port = tempServer.address().port;
+          baseUrl = `http://127.0.0.1:${port}`;
+          resolve();
+        });
+      });
     }
 
-    // POST with context
-    const resPost = await fetch(`http://localhost:3000/api/suggestions/${sampleId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        lastQuestion: 'What is total revenue by region?',
-        count: 4,
-      }),
-    });
-    const jsonPost = await resPost.json();
-    if (!jsonPost.success || !Array.isArray(jsonPost.data) || jsonPost.data.length !== 4) {
-      throw new Error('POST /api/suggestions/:id failed: ' + JSON.stringify(jsonPost));
+    try {
+      const testSession = 'test-api-session-' + Date.now();
+      const resSample = await fetch(`${baseUrl}/api/sample`, {
+        method: 'POST',
+        headers: { 'x-session-id': testSession },
+      });
+      const jsonSample = await resSample.json();
+      if (!jsonSample.success || !jsonSample.data?.profile?.id) {
+        throw new Error('Failed to initialize sample for suggestions API test: ' + JSON.stringify(jsonSample));
+      }
+      const sampleId = jsonSample.data.profile.id;
+
+      // GET
+      const resGet = await fetch(`${baseUrl}/api/suggestions/${sampleId}`, {
+        headers: { 'x-session-id': testSession },
+      });
+      const jsonGet = await resGet.json();
+      if (!jsonGet.success || !Array.isArray(jsonGet.data) || jsonGet.data.length === 0) {
+        throw new Error('GET /api/suggestions/:id failed: ' + JSON.stringify(jsonGet));
+      }
+
+      // POST with context
+      const resPost = await fetch(`${baseUrl}/api/suggestions/${sampleId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-session-id': testSession },
+        body: JSON.stringify({
+          lastQuestion: 'What is total revenue by region?',
+          count: 4,
+        }),
+      });
+      const jsonPost = await resPost.json();
+      if (!jsonPost.success || !Array.isArray(jsonPost.data) || jsonPost.data.length !== 4) {
+        throw new Error('POST /api/suggestions/:id failed: ' + JSON.stringify(jsonPost));
+      }
+    } finally {
+      if (tempServer) {
+        await new Promise<void>((resolve) => tempServer.close(() => resolve()));
+      }
     }
   });
 
@@ -1508,7 +1570,7 @@ async function runAudit() {
   });
 
   // ============================================================================
-  // TEST SUITE 10: Session Isolation & Multi-Tenancy
+  // TEST SUITE 10: Session-Scoped Isolation & Dataset Integrity
   // ============================================================================
   console.log('\n[Security & Isolation] Testing session isolation and dataset segregation in dataset store');
   recordTest('Session Isolation', 'Verifies datasets uploaded in Session A are not accessible in Session B', () => {
@@ -1530,6 +1592,39 @@ async function runAudit() {
     const fetchedFromB = datasetStore.getDataset(sessionB, dsA.id);
     if (fetchedFromB) {
       throw new Error('Data leakage detected: Session B was able to fetch dataset object of Session A');
+    }
+  });
+
+  recordTest('Dataset Integrity - Rejects Invalid Dataset IDs', 'Verifies non-existent IDs return null / false without falling back to sample data', () => {
+    const freshSession = 'test-integrity-' + Date.now();
+    // 1. Fresh session has no datasets and getActiveDataset is undefined
+    const active = datasetStore.getActiveDataset(freshSession);
+    if (active !== undefined) {
+      throw new Error(`Expected undefined active dataset in fresh session, got: ${active?.id}`);
+    }
+
+    // 2. Querying invalid ID from server store returns undefined
+    const invalidDs = datasetStore.getDataset(freshSession, 'invalid-id-999');
+    if (invalidDs !== undefined) {
+      throw new Error('Expected undefined for non-existent dataset ID in datasetStore');
+    }
+
+    // 3. Setting active dataset to invalid ID returns false
+    const setActiveResult = datasetStore.setActiveDataset(freshSession, 'invalid-id-999');
+    if (setActiveResult !== false) {
+      throw new Error('Expected setActiveDataset to return false for non-existent dataset ID');
+    }
+
+    // 4. Client engine also returns undefined for unknown dataset ID
+    const clientInvalid = clientEngine.getDataset('invalid-client-ds-id');
+    if (clientInvalid !== undefined) {
+      throw new Error('Expected clientEngine.getDataset to return undefined for non-existent ID');
+    }
+
+    // 5. Client engine setActiveDataset returns false for unknown ID
+    const clientSetActive = clientEngine.setActiveDataset('invalid-client-ds-id');
+    if (clientSetActive !== false) {
+      throw new Error('Expected clientEngine.setActiveDataset to return false for non-existent ID');
     }
   });
 

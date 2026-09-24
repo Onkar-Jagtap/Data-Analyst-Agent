@@ -171,6 +171,41 @@ export function requestTimeoutMiddleware(timeoutMs: number = 45000) {
 app.use('/api', requestTimeoutMiddleware(45000));
 app.use('/api', createRateLimiter({ windowMs: 60000, maxRequests: 300, category: 'general' }));
 
+// Category-specific rate limiters
+export const aiQueryRateLimiter = createRateLimiter({
+  windowMs: 60000,
+  maxRequests: 30,
+  category: 'AI Natural Language Queries',
+});
+
+export const suggestionsRateLimiter = createRateLimiter({
+  windowMs: 60000,
+  maxRequests: 45,
+  category: 'Smart Query Suggestions',
+});
+
+export const reportsRateLimiter = createRateLimiter({
+  windowMs: 60000,
+  maxRequests: 20,
+  category: 'Executive Reports & Strategy',
+});
+
+export const uploadsRateLimiter = createRateLimiter({
+  windowMs: 60000,
+  maxRequests: 25,
+  category: 'Dataset Ingestion & Imports',
+});
+
+export function getRequestAbortSignal(req: express.Request, res: express.Response): AbortSignal {
+  const controller = new AbortController();
+  req.on('close', () => {
+    if (!res.writableEnded) {
+      controller.abort();
+    }
+  });
+  return controller.signal;
+}
+
 // ----------------------------------------------------
 // API ROUTES FIRST
 // ----------------------------------------------------
@@ -207,7 +242,7 @@ app.post('/api/datasets/active/:id', (req, res) => {
 });
 
 // Load / Reset Sample Dataset for current session
-app.post('/api/sample', (req, res) => {
+app.post('/api/sample', uploadsRateLimiter, (req, res) => {
   const sid = getSessionId(req);
   const sample = datasetStore.initSample(sid);
   datasetStore.setActiveDataset(sid, sample.id);
@@ -222,7 +257,7 @@ app.post('/api/sample', (req, res) => {
 });
 
 // Load / Reset Enterprise 5-Department Suite (Leads, Marketing, Sales, Operations, Finance)
-app.post('/api/sample-company-suite', (req, res) => {
+app.post('/api/sample-company-suite', uploadsRateLimiter, (req, res) => {
   const sid = getSessionId(req);
   const created = datasetStore.initEnterpriseCompanySuite(sid);
   res.json({
@@ -240,7 +275,7 @@ app.post('/api/sample-company-suite', (req, res) => {
 });
 
 // Upload CSV or Excel file (session-isolated & sanitized)
-app.post('/api/upload', upload.single('file'), async (req, res) => {
+app.post('/api/upload', uploadsRateLimiter, upload.single('file'), async (req, res) => {
   const sid = getSessionId(req);
   try {
     if (!req.file) {
@@ -313,7 +348,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 });
 
 // Batch Upload multiple Departmental CSVs or Excels at once
-app.post('/api/upload-batch', upload.array('files', 10), async (req, res) => {
+app.post('/api/upload-batch', uploadsRateLimiter, upload.array('files', 10), async (req, res) => {
   const sid = getSessionId(req);
   try {
     const files = req.files as Express.Multer.File[];
@@ -381,12 +416,13 @@ app.post('/api/upload-batch', upload.array('files', 10), async (req, res) => {
 });
 
 // Company 360° Multi-Dataset Cross-Functional Analysis
-app.get('/api/company-360', async (req, res) => {
+app.get('/api/company-360', reportsRateLimiter, async (req, res) => {
   const sid = getSessionId(req);
+  const abortSignal = getRequestAbortSignal(req, res);
   try {
     const allDatasets = datasetStore.getAllDatasets(sid);
     const directive = typeof req.query.directive === 'string' ? req.query.directive : undefined;
-    const analysis = await analyzeEnterpriseDatasets(allDatasets, directive);
+    const analysis = await analyzeEnterpriseDatasets(allDatasets, directive, abortSignal);
     res.json({ success: true, data: analysis });
   } catch (err: any) {
     console.error('Company 360 analysis error:', err);
@@ -398,12 +434,13 @@ app.get('/api/company-360', async (req, res) => {
 });
 
 // Company 360° Directive Refinement (AI / Strategic simulation)
-app.post('/api/company-360/refine', async (req, res) => {
+app.post('/api/company-360/refine', reportsRateLimiter, async (req, res) => {
   const sid = getSessionId(req);
+  const abortSignal = getRequestAbortSignal(req, res);
   try {
     const directive = req.body?.directive;
     const allDatasets = datasetStore.getAllDatasets(sid);
-    const analysis = await analyzeEnterpriseDatasets(allDatasets, directive);
+    const analysis = await analyzeEnterpriseDatasets(allDatasets, directive, abortSignal);
     res.json({ success: true, data: analysis });
   } catch (err: any) {
     console.error('Company 360 refinement error:', err);
@@ -507,14 +544,15 @@ app.get('/api/dashboard/:id', (req, res) => {
 });
 
 // Executive Business Intelligence & Strategy Report Endpoint
-app.get('/api/report/:id', async (req, res) => {
+app.get('/api/report/:id', reportsRateLimiter, async (req, res) => {
   const dataset = getDatasetFromRequest(req);
   if (!dataset) {
     return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
 
+  const abortSignal = getRequestAbortSignal(req, res);
   try {
-    const report = await generateExecutiveReport(dataset.profile, dataset.rawRows, { useAi: true });
+    const report = await generateExecutiveReport(dataset.profile, dataset.rawRows, { useAi: true, abortSignal });
     res.json({ success: true, data: report });
   } catch (err: any) {
     console.error('Error generating executive report:', err);
@@ -522,17 +560,19 @@ app.get('/api/report/:id', async (req, res) => {
   }
 });
 
-app.post('/api/report/:id', async (req, res) => {
+app.post('/api/report/:id', reportsRateLimiter, async (req, res) => {
   const dataset = getDatasetFromRequest(req);
   if (!dataset) {
     return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
   }
 
+  const abortSignal = getRequestAbortSignal(req, res);
   const { useAi, directive } = req.body || {};
   try {
     const report = await generateExecutiveReport(dataset.profile, dataset.rawRows, {
       useAi: useAi !== false,
       directive,
+      abortSignal,
     });
     res.json({ success: true, data: report });
   } catch (err: any) {
@@ -542,7 +582,7 @@ app.post('/api/report/:id', async (req, res) => {
 });
 
 // Targeted Section AI Refinement Endpoint
-app.post('/api/report/:id/refine-section', async (req, res) => {
+app.post('/api/report/:id/refine-section', reportsRateLimiter, async (req, res) => {
   const dataset = getDatasetFromRequest(req);
   if (!dataset) {
     return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
@@ -553,6 +593,7 @@ app.post('/api/report/:id/refine-section', async (req, res) => {
     return res.status(400).json({ success: false, error: { message: 'section and instruction are required.' } });
   }
 
+  const abortSignal = getRequestAbortSignal(req, res);
   try {
     const dashboard = computeDashboardData(dataset.rawRows, dataset.profile, {});
     const calcs = dashboard.businessCalculations || {
@@ -598,6 +639,7 @@ app.post('/api/report/:id/refine-section', async (req, res) => {
       datasetName: dataset.filename,
       domain: primaryDomain,
       calcs,
+      abortSignal,
     });
 
     res.json({ success: true, data: result.refinedContent });
@@ -705,7 +747,7 @@ app.get('/api/data/:id', (req, res) => {
 
 // Natural Language Query Endpoint
 // Workflow: Gemini Plan -> Deterministic Python/TS Math -> Validation -> Plotly Chart -> Gemini Explainer -> Transparent Data Handling
-app.post('/api/query/:id', async (req, res) => {
+app.post('/api/query/:id', aiQueryRateLimiter, async (req, res) => {
   try {
     const dataset = getDatasetFromRequest(req);
     if (!dataset) {
@@ -717,8 +759,10 @@ app.post('/api/query/:id', async (req, res) => {
       return res.status(400).json({ success: false, error: { message: 'A query question is required.' } });
     }
 
+    const abortSignal = getRequestAbortSignal(req, res);
+
     // 1. AI Plan: Map natural language to strict execution plan with multi-turn conversation context
-    const plan = await planAnalysisWithGemini(question, dataset.profile, conversationHistory);
+    const plan = await planAnalysisWithGemini(question, dataset.profile, conversationHistory, abortSignal);
 
     // 2. Deterministic Execution: pure math / statistics
     const execution = executeAnalysisPlan(dataset.rawRows, dataset.profile, plan);
@@ -742,7 +786,8 @@ app.post('/api/query/:id', async (req, res) => {
       execution.methodDescription,
       execution.data,
       execution.summaryMetrics,
-      execution.dataHandling
+      execution.dataHandling,
+      abortSignal
     );
 
     // 4. Plotly Visualization
@@ -776,16 +821,18 @@ app.post('/api/query/:id', async (req, res) => {
 });
 
 // Grounded Suggested Questions Endpoint (GET)
-app.get('/api/suggestions/:id', async (req, res) => {
+app.get('/api/suggestions/:id', suggestionsRateLimiter, async (req, res) => {
   try {
     const dataset = getDatasetFromRequest(req);
     if (!dataset) {
       return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
     }
 
+    const abortSignal = getRequestAbortSignal(req, res);
     const suggestions = await generateSuggestionsForDataset(dataset.profile, {
       useAi: true,
       count: 6,
+      abortSignal,
     });
 
     res.json({
@@ -804,19 +851,21 @@ app.get('/api/suggestions/:id', async (req, res) => {
 });
 
 // Grounded Suggested Questions Endpoint (POST with context / follow-ups)
-app.post('/api/suggestions/:id', async (req, res) => {
+app.post('/api/suggestions/:id', suggestionsRateLimiter, async (req, res) => {
   try {
     const dataset = getDatasetFromRequest(req);
     if (!dataset) {
       return res.status(404).json({ success: false, error: { code: 'DATASET_NOT_FOUND', message: `Dataset '${req.params.id || 'active'}' was not found.` } });
     }
 
+    const abortSignal = getRequestAbortSignal(req, res);
     const { lastQuestion, lastResult, count } = req.body || {};
     const suggestions = await generateSuggestionsForDataset(dataset.profile, {
       useAi: true,
       lastQuestion,
       lastResult,
       count: count || 6,
+      abortSignal,
     });
 
     res.json({
@@ -843,6 +892,39 @@ app.post('/api/chart/:id', (req, res) => {
     }
 
     const { type, xAxis, yAxis, secondaryYAxis, colorDimension, aggregation, sortBy, sortDirection, topN } = req.body;
+
+    // Validate requested fields against dataset schema
+    const colMap = new Map(dataset.profile.columns.map(c => [c.name.toLowerCase(), c.name]));
+    if (xAxis && !colMap.has(xAxis.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'UNKNOWN_COLUMN', message: `Requested X-axis column '${xAxis}' not found in dataset.` },
+      });
+    }
+    if (yAxis && !colMap.has(yAxis.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'UNKNOWN_COLUMN', message: `Requested Y-axis metric '${yAxis}' not found in dataset.` },
+      });
+    }
+    if (secondaryYAxis && !colMap.has(secondaryYAxis.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'UNKNOWN_COLUMN', message: `Requested secondary Y-axis metric '${secondaryYAxis}' not found in dataset.` },
+      });
+    }
+    if (colorDimension && !colMap.has(colorDimension.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'UNKNOWN_COLUMN', message: `Requested color dimension '${colorDimension}' not found in dataset.` },
+      });
+    }
+    if (sortBy && !colMap.has(sortBy.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'UNKNOWN_COLUMN', message: `Requested sort column '${sortBy}' not found in dataset.` },
+      });
+    }
 
     // Special handling for correlation heatmap
     if (type === 'heatmap') {

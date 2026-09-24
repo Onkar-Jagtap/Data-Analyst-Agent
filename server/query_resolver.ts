@@ -311,7 +311,9 @@ export const BASE_SYNONYM_DICTIONARY: DomainAwareSynonymDefinition[] = [
       'gross profit',
       'total profit',
       'margin',
-      'margins',
+      'profit margin',
+      'average margin',
+      'net margin',
     ],
   },
   {
@@ -338,10 +340,20 @@ export const BASE_SYNONYM_DICTIONARY: DomainAwareSynonymDefinition[] = [
       'units',
       'unit count',
       'units sold',
-      'volume',
-      'order volume',
       'items sold',
       'count of items',
+    ],
+  },
+  {
+    domain: 'all',
+    canonicalKey: 'volume',
+    type: 'numeric',
+    synonyms: [
+      'volume',
+      'order volume',
+      'transaction volume',
+      'trade volume',
+      'trading volume',
     ],
   },
   {
@@ -393,7 +405,13 @@ export const BASE_SYNONYM_DICTIONARY: DomainAwareSynonymDefinition[] = [
     domain: 'all',
     canonicalKey: 'country',
     type: 'categorical',
-    synonyms: ['country', 'nation', 'state', 'province'],
+    synonyms: ['country', 'nation'],
+  },
+  {
+    domain: 'all',
+    canonicalKey: 'state',
+    type: 'categorical',
+    synonyms: ['state', 'province', 'prefecture', 'canton'],
   },
   {
     domain: 'all',
@@ -405,7 +423,7 @@ export const BASE_SYNONYM_DICTIONARY: DomainAwareSynonymDefinition[] = [
     domain: 'all',
     canonicalKey: 'category',
     type: 'categorical',
-    synonyms: ['category', 'product category', 'department', 'line', 'class', 'classification'],
+    synonyms: ['category', 'product category', 'line', 'class', 'classification'],
   },
   {
     domain: 'all',
@@ -425,8 +443,6 @@ export const BASE_SYNONYM_DICTIONARY: DomainAwareSynonymDefinition[] = [
     type: 'datetime',
     synonyms: [
       'date',
-      'order date',
-      'transaction date',
       'timestamp',
       'created at',
       'time',
@@ -440,25 +456,35 @@ export const BASE_SYNONYM_DICTIONARY: DomainAwareSynonymDefinition[] = [
 // Backwards compatibility export
 export const SYNONYM_DICTIONARY = BASE_SYNONYM_DICTIONARY;
 
+let isInDomainInference = false;
+
 /**
  * Infer domain from columns when a full DatasetProfile is not available.
  */
 export function inferDomainFromColumns(columns: ColumnProfile[]): DatasetDomain {
   if (!columns || columns.length === 0) return 'general';
-  const dummyProfile: DatasetProfile = {
-    id: 'temp',
-    filename: 'data.csv',
-    rowCount: 100,
-    columnCount: columns.length,
-    memoryEstimateKb: 10,
-    duplicateRowCount: 0,
-    duplicatePercentage: 0,
-    totalMissingCells: 0,
-    missingPercentage: 0,
-    columns,
-    createdAt: new Date().toISOString(),
-  };
-  return detectDatasetDomain(dummyProfile).domain;
+  if (isInDomainInference) {
+    return 'general';
+  }
+  isInDomainInference = true;
+  try {
+    const dummyProfile: DatasetProfile = {
+      id: 'temp',
+      filename: 'data.csv',
+      rowCount: 100,
+      columnCount: columns.length,
+      memoryEstimateKb: 10,
+      duplicateRowCount: 0,
+      duplicatePercentage: 0,
+      totalMissingCells: 0,
+      missingPercentage: 0,
+      columns,
+      createdAt: new Date().toISOString(),
+    };
+    return detectDatasetDomain(dummyProfile).domain;
+  } finally {
+    isInDomainInference = false;
+  }
 }
 
 /**
@@ -668,6 +694,132 @@ export function resolveColumn(
     status: 'not_found',
     confidence: 'none',
     reason: `No matching column found for '${trimmed}'`,
+  };
+}
+
+export interface DateResolutionResult {
+  status: 'resolved' | 'ambiguous' | 'not_found' | 'none_specified';
+  column?: ColumnProfile;
+  candidates?: ColumnProfile[];
+  reason?: string;
+  clarificationMessage?: string;
+}
+
+/**
+ * Strict date dimension resolution.
+ * - Explicitly requested date column: must resolve to a datetime column or return not_found / ambiguous.
+ *   NEVER silently default to dateCols[0] when an explicit date was requested!
+ * - Generic query ("over time", "trend"): deterministically infers the primary date column,
+ *   or returns ambiguous if multiple unfamiliar dates exist.
+ */
+export function resolveDateColumn(
+  requestedDateCol: string | undefined,
+  columns: ColumnProfile[],
+  options?: { domain?: DatasetDomain; userQuestion?: string }
+): DateResolutionResult {
+  const dateCols = columns.filter(c => c.type === 'datetime');
+  if (dateCols.length === 0) {
+    return {
+      status: 'not_found',
+      reason: 'Dataset contains no datetime columns.',
+      clarificationMessage: 'No date or timestamp columns found in this dataset.',
+    };
+  }
+
+  // 1. Explicitly requested date column (from plan.group_by or caller)
+  if (requestedDateCol && requestedDateCol.trim() !== '') {
+    const trimmed = requestedDateCol.trim();
+    // Resolve using resolveColumn with datetime type filter
+    const res = resolveColumn(trimmed, columns, { typeFilter: 'datetime', domain: options?.domain });
+    if (res.column && res.column.type === 'datetime') {
+      return { status: 'resolved', column: res.column };
+    }
+    if (res.status === 'ambiguous') {
+      return {
+        status: 'ambiguous',
+        candidates: res.candidates,
+        reason: `Ambiguous date column '${trimmed}'. Matches multiple datetime columns: ${res.candidates?.map(c => c.name).join(', ')}.`,
+        clarificationMessage: `Which date column did you mean? Candidates: ${res.candidates?.map(c => c.name).join(', ')}.`,
+      };
+    }
+
+    // Direct token/substring check against available date columns
+    const lowerReq = trimmed.toLowerCase().replace(/_/g, ' ');
+    const subMatches = dateCols.filter(c => {
+      const cLower = c.name.toLowerCase().replace(/_/g, ' ');
+      return cLower === lowerReq || cLower.includes(lowerReq) || lowerReq.includes(cLower);
+    });
+    if (subMatches.length === 1) {
+      return { status: 'resolved', column: subMatches[0] };
+    } else if (subMatches.length > 1) {
+      return {
+        status: 'ambiguous',
+        candidates: subMatches,
+        reason: `Multiple date columns match '${trimmed}': ${subMatches.map(c => c.name).join(', ')}.`,
+        clarificationMessage: `Multiple date columns match '${trimmed}'. Did you mean ${subMatches.map(c => c.name).join(' or ')}?`,
+      };
+    }
+
+    return {
+      status: 'not_found',
+      reason: `The requested date column '${trimmed}' could not be resolved to a datetime column in this dataset.`,
+      clarificationMessage: `Date column '${trimmed}' was not found. Available date columns are: ${dateCols.map(c => c.name).join(', ')}.`,
+    };
+  }
+
+  // 2. No date column explicitly specified in plan.group_by.
+  // Check if user question explicitly mentions any specific date column name!
+  if (options?.userQuestion) {
+    const qLower = options.userQuestion.toLowerCase().replace(/_/g, ' ');
+    const mentionedDateCols = dateCols.filter(c => {
+      const cLower = c.name.toLowerCase().replace(/_/g, ' ');
+      const wordRegex = new RegExp(`\\b${escapeRegex(cLower)}\\b`, 'i');
+      return wordRegex.test(qLower);
+    });
+    if (mentionedDateCols.length === 1) {
+      return { status: 'resolved', column: mentionedDateCols[0] };
+    } else if (mentionedDateCols.length > 1) {
+      return {
+        status: 'ambiguous',
+        candidates: mentionedDateCols,
+        reason: `Multiple date columns mentioned in question: ${mentionedDateCols.map(c => c.name).join(', ')}.`,
+        clarificationMessage: `Multiple date columns were mentioned. Did you mean ${mentionedDateCols.map(c => c.name).join(' or ')}?`,
+      };
+    }
+  }
+
+  // 3. Truly generic time-series query (e.g. "sales over time", "trend over time"):
+  // If only 1 datetime column exists, use it deterministically.
+  if (dateCols.length === 1) {
+    return { status: 'resolved', column: dateCols[0] };
+  }
+
+  // If multiple datetime columns exist, apply deterministic preference order:
+  const preferredNames = [
+    'order date',
+    'transaction date',
+    'date',
+    'created date',
+    'created at',
+    'event date',
+    'timestamp',
+  ];
+  for (const pref of preferredNames) {
+    const found = dateCols.find(c => {
+      const cLower = c.name.toLowerCase().replace(/[_-]/g, ' ').trim();
+      return cLower === pref;
+    });
+    if (found) {
+      return { status: 'resolved', column: found };
+    }
+  }
+
+  // If none matches preferred names, it is ambiguous across multiple dates!
+  return {
+    status: 'ambiguous',
+    candidates: dateCols,
+    reason: `Multiple date columns exist (${dateCols.map(c => c.name).join(', ')}). Please specify which date dimension to analyze.`,
+    clarificationMessage: `Your dataset has multiple date columns (${dateCols.map(c => c.name).join(', ')}). Please specify which one to analyze over time.`,
   };
 }
 
@@ -1226,8 +1378,38 @@ export function validateAndRepairPlan(
       const gRes = resolveColumn(g, profile.columns, { domain });
       if (gRes.column) {
         repairedGroups.push(gRes.column.name);
+      } else if (gRes.status === 'ambiguous') {
+        return {
+          valid: false,
+          clarificationNeeded: true,
+          repairedPlan: {
+            operation: 'clarification' as any,
+            user_intent_summary: `Dimension '${g}' matches multiple columns.`,
+          },
+          error: {
+            code: 'AMBIGUOUS_DIMENSION',
+            message: `The dimension '${g}' matches multiple columns in dataset '${profile.filename}'.`,
+            reason: `Candidates: ${gRes.candidates?.map(c => c.name).join(', ')}.`,
+            suggestion: `Please clarify which dimension you meant: ${gRes.candidates?.map(c => c.name).join(', ')}.`,
+          },
+        };
       } else {
-        // If Gemini hallucinated a group column, do not keep it
+        // gRes.status === 'not_found'
+        if (plan.operation === 'group_aggregate' || plan.operation === 'ranking') {
+          return {
+            valid: false,
+            repairedPlan: {
+              operation: 'clarification' as any,
+              user_intent_summary: `Dimension '${g}' was not found in dataset.`,
+            },
+            error: {
+              code: 'UNKNOWN_DIMENSION',
+              message: `The grouping dimension '${g}' was not found in dataset '${profile.filename}'.`,
+              reason: `Cannot group by non-existent column '${g}'.`,
+              suggestion: `Available categorical dimensions are: ${catCols.map(c => c.name).join(', ')}.`,
+            },
+          };
+        }
         console.warn(`Unresolved group_by column '${g}' omitted from plan.`);
       }
     }
@@ -1248,26 +1430,53 @@ export function validateAndRepairPlan(
 
   // 4. Validate Time Series Operation
   if (plan.operation === 'time_series') {
-    const timeCol = plan.group_by?.[0]
-      ? profile.columns.find(c => c.name === plan.group_by?.[0] && c.type === 'datetime')
-      : dateCols[0];
+    const dateRes = resolveDateColumn(plan.group_by?.[0], profile.columns, {
+      domain,
+      userQuestion: question,
+    });
 
-    if (!timeCol) {
-      // Dataset has no datetime columns!
+    if (dateRes.status === 'not_found') {
+      const requested = plan.group_by?.[0];
       return {
         valid: false,
         repairedPlan: {
           operation: 'clarification' as any,
-          user_intent_summary: 'Dataset does not contain a datetime column for time series trend analysis.',
+          user_intent_summary: requested
+            ? `Requested date column '${requested}' was not found in dataset.`
+            : 'Dataset does not contain a datetime column for time series trend analysis.',
         },
         error: {
-          code: 'NO_DATETIME_COLUMN',
-          message: `Cannot compute time series trend because dataset '${profile.filename}' contains no date or timestamp columns.`,
-          suggestion: 'Try grouping by a categorical dimension like Region or Product instead.',
+          code: requested ? 'INVALID_DATETIME_COLUMN' : 'NO_DATETIME_COLUMN',
+          message: requested
+            ? `Cannot compute time series on '${requested}' because it was not found as a datetime column in dataset '${profile.filename}'.`
+            : `Cannot compute time series trend because dataset '${profile.filename}' contains no date or timestamp columns.`,
+          suggestion: dateCols.length > 0
+            ? `Available date columns are: ${dateCols.map(c => c.name).join(', ')}.`
+            : 'Try grouping by a categorical dimension like Region or Product instead.',
         },
       };
     }
-    plan.group_by = [timeCol.name];
+
+    if (dateRes.status === 'ambiguous') {
+      return {
+        valid: false,
+        clarificationNeeded: true,
+        repairedPlan: {
+          operation: 'clarification' as any,
+          user_intent_summary: dateRes.reason || 'Multiple date columns match query.',
+        },
+        error: {
+          code: 'AMBIGUOUS_DATETIME_COLUMN',
+          message: dateRes.clarificationMessage || 'Multiple date columns found. Please clarify which date to use.',
+          reason: dateRes.reason,
+          suggestion: `Candidate date columns: ${dateRes.candidates?.map(c => c.name).join(', ')}.`,
+        },
+      };
+    }
+
+    if (dateRes.column) {
+      plan.group_by = [dateRes.column.name];
+    }
   }
 
   // 5. Validate Correlation Operation
